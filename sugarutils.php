@@ -520,15 +520,17 @@ class sugarutils {
     }
     
     private function dbManageSpace() {
-        $this->echoc("\nEntire Database\n", 'label');
+        $this->echoc("\n#### Entire Database\n", 'label');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Database Size in GB`
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc('```\n', 'label');
         $DatabaseSize = $Rows[0]['Database Size in GB'];
         
         $this->echoc("\nAll Tables\n", 'label');
@@ -548,7 +550,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
         
-        $this->echoc("\nAudit Tables\n", 'label');
+        $this->echoc("\n#### Audit Tables\n", 'label');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
@@ -578,7 +580,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         utils::print_t($Rows);
         
         
-        $this->echoc("\nActivity Stream Tables\n", 'label');
+        $this->echoc("\n#### Activity Stream Tables\n", 'label');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round(((data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
@@ -606,7 +608,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
         
-        $this->echoc("\nOther Usual Suspects\n", 'label');
+        $this->echoc("\n#### Other Usual Suspects\n", 'label');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
