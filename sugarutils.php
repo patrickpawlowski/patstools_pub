@@ -530,7 +530,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
-        $this->echoc('```\n', 'label');
+        $this->echoc("```\n", 'label');
         $DatabaseSize = $Rows[0]['Database Size in GB'];
         
         $this->echoc("\nAll Tables\n", 'label');
@@ -545,10 +545,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
 ORDER BY (data_length + index_length) DESC;
  
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         $this->echoc("\n#### Audit Tables\n", 'label');
         $SQL = "SELECT 
@@ -557,10 +559,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME LIKE '%_audit';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         
         $SQL = "SELECT 
@@ -574,10 +578,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND round(((data_length + index_length) / 1024 / 1024 / 1024), 2) > .9
 ORDER BY (data_length + index_length) DESC; 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         
         $this->echoc("\n#### Activity Stream Tables\n", 'label');
@@ -587,10 +593,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME IN ('activities','activities_users','subscriptions');";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         
         $SQL = "SELECT 
@@ -603,10 +611,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND TABLE_NAME IN ('activities','activities_users','subscriptions')
 ORDER BY (data_length + index_length) DESC;
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         $this->echoc("\n#### Other Usual Suspects\n", 'label');
         $SQL = "SELECT 
@@ -615,10 +625,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME IN ('job_queue','audit_events','pmse_bpm_flow','emails_text');";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         
         $SQL = "SELECT 
@@ -631,10 +643,12 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND TABLE_NAME IN ('job_queue','audit_events','pmse_bpm_flow','emails_text')
 ORDER BY (data_length + index_length) DESC;
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
-        $this->echoc($SQL . PHP_EOL, 'command');
+        $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
+        $this->echoc('```\n', 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
         utils::print_t($Rows);
+        $this->echoc("```\n", 'label');
         
         
         
