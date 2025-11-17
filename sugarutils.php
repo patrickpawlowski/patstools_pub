@@ -536,7 +536,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
      table_schema AS `Database`, 
      TABLE_NAME AS `Table`, 
      round(((data_length + index_length) / 1024 / 1024 / 1024), 2) `Size in GB`,
-     round(((data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
+     round((((data_length + index_length) / 1024 / 1024 / 1024) / {$DatabaseSize}) * 100, 2) `Percentage`
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND round(((data_length + index_length) / 1024 / 1024 / 1024), 2) > .9
