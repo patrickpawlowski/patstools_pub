@@ -521,6 +521,7 @@ class sugarutils {
     
     private function dbManageSpace() {
         $this->echoc("\n#### Entire Database\n", 'label');
+        $this->echoc("This is the base size of the entire database. \n", 'data');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Database Size in GB`
 FROM information_schema.TABLES 
@@ -533,7 +534,8 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $this->echoc("```\n", 'label');
         $DatabaseSize = $Rows[0]['Database Size in GB'];
         
-        $this->echoc("\nAll Tables\n", 'label');
+        $this->echoc("\n#### Large Tables\n", 'label');
+        $this->echoc("These are all the tables that are .9 GB and larger\n", 'data');
         $SQL = "SELECT 
      table_schema AS `Database`, 
      TABLE_NAME AS `Table`, 
