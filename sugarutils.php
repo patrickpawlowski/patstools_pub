@@ -520,6 +520,7 @@ class sugarutils {
     }
     
     private function dbManageSpace() {
+        $this->echoc("{$this->InstanceInfo['INSTANCE']}_database_analysis.md\n\n", 'data');
         $this->echoc("\n#### Entire Database\n", 'label');
         $this->echoc("This is the base size of the entire database. \n", 'data');
         $SQL = "SELECT 
