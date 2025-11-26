@@ -53,7 +53,7 @@ if (in_array('revert', $argv)) {
 
 //$StartTime = time();
 $StartTime = new DateTime();
-echo date('Y-m-d H:i:s T')." updating collation on {$sugar_config['host_name']} . . .".PHP_EOL;
+echo date('Y-m-d H:i:s T')." updating collation on {$sugar_config['host_name']} to {$Collation}. . .".PHP_EOL;
 
 $mysqli = new mysqli($db_host_name, $db_user_name, $db_passwprd, $db_name);
 if ($mysqli->connect_errno) {
@@ -83,7 +83,7 @@ $res = $mysqli->query("SHOW TABLES");
 while ($row = $res->fetch_array()) {
     $TableStartTime = new DateTime();
     $Date = date('Y-m-d H:i:s T');
-    echo "{$Date} - Updating table: {$row[0]}\n";
+    echo "{$Date} - Updating table: {$row[0]} to {$Collation}\n";
 //    if($mysqli->query("ALTER TABLE {$row[0]} COLLATE utf8mb4_general_ci")){
 //    if($mysqli->query("ALTER TABLE {$row[0]} COLLATE utf8mb4_0900_ai_ci")){
     if($mysqli->query("ALTER TABLE {$row[0]} COLLATE {$Collation}")){
