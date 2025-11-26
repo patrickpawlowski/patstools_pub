@@ -1034,14 +1034,10 @@ WHERE parent_id IS NOT NULL
         if(!$this->askYes("Type 'yes' to start the collation update.")){
             return;
         }
-//        $Cmd1 = "wget https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4";
         if(file_exists('sugarconvertutf8mb4')){
             unlink('sugarconvertutf8mb4');
         }
-        $Cmd1 = "wget https://wsugardev1.w-systems.com/patstools/sugarconvertutf8mb4";
-        
-//        wget -q https://wsugardev1.w-systems.com/patstools/sugarutils -O sugarutils; php ./sugarutils
-        
+        $Cmd1 = "wget https://raw.githubusercontent.com/patrickpawlowski/patstools_pub/refs/heads/main/sugarconvertutf8mb4";
         exec($Cmd1);
         if($Revert){
         system('./; nohup php ./sugarconvertutf8mb4 revert silent >> sugarconvertutf8mb4.log &');

@@ -1,0 +1,126 @@
+#! /usr/bin/env php
+<?php
+
+/**
+ * Created by NetBeans.
+ * User: patpawlowski
+ * Date: Jul 12, 2019 at 12:50:34 PM 
+ * File: sugarconvertutf8mb4
+ * 
+ * 
+
+wget https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4; php ./sugarconvertutf8mb4; rm ./sugarconvertutf8mb4
+
+ * 
+ */
+
+if (isset($argv[1]) && $argv[1] == 'update') {
+    $ScriptLocation = __FILE__;
+    $cmd = "wget https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4 -O /usr/local/bin/sugarconvertutf8mb4; chmod +xr /usr/local/bin/sugarconvertutf8mb4";
+    echo $cmd.PHP_EOL;
+    exec($cmd);
+    die("Script updated\n\n");
+}
+
+    
+
+require_once 'config.php';
+$db_host_name = $sugar_config['dbconfig']['db_host_name'];
+$db_user_name = $sugar_config['dbconfig']['db_user_name'];
+$db_passwprd = $sugar_config['dbconfig']['db_password'];
+$db_name = $sugar_config['dbconfig']['db_name'];
+
+echo "Sugar db hostname: ", $db_host_name, PHP_EOL;
+echo "Sugar db name: ", $db_name, PHP_EOL;
+echo "Sugar db username: ", $db_user_name, PHP_EOL;
+//echo "Sugar db password: ", $db_name, PHP_EOL;
+
+// Check for a parameter of "silent" and bypass the confirmation if it exists
+if (!in_array('silent', $argv)) {
+    echo "\n\tThis script will attempt to alter the above database and all tables convertint them to utf8mb4. Enter y to agree or just press enter to cancel.\n ";
+    $Continue = trim(fgets(STDIN)); // reads one line from STDIN
+    if(strtoupper($Continue) != 'Y') die("Cancelled"); 
+}
+
+if (in_array('revert', $argv)) {
+    $Collation = 'utf8mb4_general_ci';
+    echo "Converting collation to utf8mb4_general_ci\n";
+}else{
+    $Collation = 'utf8mb4_0900_ai_ci';
+    echo "Converting collation to utf8mb4_0900_ai_ci\n";
+}
+
+
+//$StartTime = time();
+$StartTime = new DateTime();
+echo date('Y-m-d H:i:s T')." updating collation on {$sugar_config['host_name']} . . .".PHP_EOL;
+
+$mysqli = new mysqli($db_host_name, $db_user_name, $db_passwprd, $db_name);
+if ($mysqli->connect_errno) {
+    echo "Failed to connect to MySQL: (" . $mysqli->connect_errno . ") " . $mysqli->connect_error;
+}
+echo $mysqli->host_info . " xxxxxxxxxx\n";
+
+//$mysqli->query("ALTER DATABASE {$db_name} DEFAULT CHARACTER SET utf8mb4");
+//$mysqli->query("ALTER DATABASE {$db_name} DEFAULT COLLATE utf8mb4_general_ci");
+echo "Updating database: {$db_name}\n";
+if($mysqli->query("ALTER DATABASE {$db_name} DEFAULT CHARACTER SET utf8mb4")){
+    echo "\tCHARACTER SET Success\n";
+}else{
+    printf("\tError: %s\n", $mysqli->error);
+}
+//if($mysqli->query("ALTER DATABASE {$db_name} DEFAULT COLLATE utf8mb4_general_ci")){
+//if($mysqli->query("ALTER DATABASE {$db_name} DEFAULT COLLATE utf8mb4_0900_ai_ci")){
+if($mysqli->query("ALTER DATABASE {$db_name} DEFAULT COLLATE {$Collation}")){
+    echo "\tCOLLATE Success\n";
+}else{
+    printf("Error: %s\n", $mysqli->error);
+}
+
+$res = $mysqli->query("SHOW TABLES");
+
+
+while ($row = $res->fetch_array()) {
+    $TableStartTime = new DateTime();
+    $Date = date('Y-m-d H:i:s T');
+    echo "{$Date} - Updating table: {$row[0]}\n";
+//    if($mysqli->query("ALTER TABLE {$row[0]} COLLATE utf8mb4_general_ci")){
+//    if($mysqli->query("ALTER TABLE {$row[0]} COLLATE utf8mb4_0900_ai_ci")){
+    if($mysqli->query("ALTER TABLE {$row[0]} COLLATE {$Collation}")){
+        $Date1 = date('Y-m-d H:i:s T');
+
+        echo "\t{$Date1} {$row[0]} seting default collation Successful\n";
+    }else{
+        printf("\t{$Date1} {$row[0]} Error: %s\n", $mysqli->error);
+    }
+//    if($mysqli->query("ALTER TABLE {$row[0]} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci")){
+//    if($mysqli->query("ALTER TABLE {$row[0]} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci")){
+    if($mysqli->query("ALTER TABLE {$row[0]} CONVERT TO CHARACTER SET utf8mb4 COLLATE {$Collation}")){
+        $Date2 = date('Y-m-d H:i:s T');
+        echo "\t{$Date2} {$row[0]} CHARACTER SET Success\n";
+    }else{
+        $Date3 = date('Y-m-d H:i:s T');
+        printf("\t{$Date3} {$row[0]} Error: %s\n", $mysqli->error);
+    }
+    
+    $TableEndTime = new DateTime();
+    $Duration = $TableStartTime->diff($TableEndTime)->format('%D:%H:%I:%S');
+    $Date4 = date('Y-m-d H:i:s T');
+    echo "\t{$Date4} {$row[0]} duration (Days:Hours:Minutes:Seconds) {$Duration}\n";
+}
+
+echo PHP_EOL.date('Y-m-d H:i:s T')." . . . finished updating collation on {$sugar_config['host_name']}\n".PHP_EOL;
+
+$EndTime = new DateTime();
+$TotalDuration = $StartTime->diff($EndTime);
+
+//$TotalDurationString = $StartTime->diff($EndTime)->format('%D:%H:%I:%S');
+echo "Total duration (Days:Hours:Minutes:Seconds) {$TotalDuration->format('%D:%H:%I:%S')}\n";
+$TotalMinutes = ($TotalDuration->days * 24 * 60) + ($TotalDuration->h * 60) + ($TotalDuration->i); 
+echo "Total duration in minutes {$TotalMinutes}\n";
+
+
+//echo ' Total Elapsed Seconds: '.(time() - $StartTime).PHP_EOL;
+//echo ' Total Elapsed Minutes: '.(time() - $StartTime)/60 .PHP_EOL;
+//echo ' Total Elapsed Hours: '.(time() - $StartTime)/60/60 .PHP_EOL;
+
