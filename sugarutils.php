@@ -592,7 +592,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $this->echoc("\n#### Activity Stream Tables\n", 'label');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
-     round(((data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
+     round((((data_length + index_length) / 1024 / 1024 / 1024) / {$DatabaseSize}) * 100, 2) `Percentage`
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME IN ('activities','activities_users','subscriptions');";
