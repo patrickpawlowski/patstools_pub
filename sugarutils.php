@@ -522,7 +522,7 @@ class sugarutils {
     private function dbManageSpace() {
         $this->echoc("{$this->InstanceInfo['INSTANCE']}_database_analysis.md\n\n", 'data');
         $this->echoc("\n#### Entire Database\n", 'label');
-        $this->echoc("This is the base size of the entire database. \n", 'data');
+        $this->echoc("Shows the total size of the database by summing all tables, giving a high-level view of overall storage usage.\n", 'data');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Database Size in GB`
 FROM information_schema.TABLES 
@@ -536,7 +536,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $DatabaseSize = $Rows[0]['Database Size in GB'];
         
         $this->echoc("\n#### Large Tables\n", 'label');
-        $this->echoc("These are all the tables that are .9 GB and larger\n", 'data');
+        $this->echoc("Identifies any individual tables over a defined threshold (0.9 GB) to highlight potential problem tables that consume disproportionate space.\n", 'data');
         $SQL = "SELECT 
      table_schema AS `Database`, 
      TABLE_NAME AS `Table`, 
@@ -556,6 +556,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $this->echoc("```\n", 'label');
         
         $this->echoc("\n#### Audit Tables\n", 'label');
+        $this->echoc("Audit tables store the history of field changes for records; this section shows how much space all *_audit tables collectively use and whether any are excessively large.", 'dta');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round(((SUM(data_length + index_length) / 1024 / 1024 / 1024) / {$DatabaseSize}) * 100, 2) `Percentage`
@@ -590,6 +591,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         
         
         $this->echoc("\n#### Activity Stream Tables\n", 'label');
+        $this->echoc("These tables track user activity posts, subscriptions, and visibility; this section shows how much space the Activity Stream subsystem consumes.\n", 'data');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round(((SUM(data_length + index_length) / 1024 / 1024 / 1024) / {$DatabaseSize}) * 100, 2) `Percentage`
@@ -622,6 +624,7 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $this->echoc("```\n", 'label');
         
         $this->echoc("\n#### Other Usual Suspects\n", 'label');
+        $this->echoc("Reports the size of common high-growth operational tables (job queue, workflow logs, audit events, email bodies) that often impact performance or storage, showing whether any of them are contributing significantly to database size.\n", 'data');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024 / {$DatabaseSize}) * 100, 2) `Percentage`
