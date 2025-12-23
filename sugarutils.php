@@ -1359,7 +1359,12 @@ WHERE parent_id IS NOT NULL
         $this->echoc("- ▶️ Running Sugar {$HealthCheckVersion} Health Check on {$this->InstanceInfo['INSTANCE']}\n", 'label');
         $Command2 = "shadowy /mnt/sugar/{$HealthCheckVersion}/sortinghat-{$HealthCheckVersion}.phar .";
         $this->echoc($Command2 . PHP_EOL, 'command');
-        system($Command2);
+        system($Command2, $ReturnValue);
+        if($ReturnValue === 0){
+            $this->echoc("The Health Check appears to have completed normally with an exit code of: {$ReturnValue}\n", 'green');
+        }else{
+            $this->echoc("\n\n**** The Health Check appears to have finished abnormally with an exit code of: {$ReturnValue} ****\n\n", 'red');
+        }
         $SystemScannerOutput = [];
         $Command3 = 'egrep "BUCKET => .: [0-9]{1,4}" healthcheck-*.log';
         $this->echoc($Command3 . PHP_EOL, 'command');
