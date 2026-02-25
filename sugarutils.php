@@ -677,15 +677,13 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
     }    
     private function checkForEnumFieldsMissingList($Command) {
         utils::echoc("Checking fields_meta_data for enum fields missing lists . . . ", 'label');
-//        $SQL = "SELECT * FROM fields_meta_data WHERE TYPE LIKE '%enum%' AND (ifnull(ext1, '') = '');";
-        $SQL = "SELECT * FROM users;";
+        $SQL = "SELECT count(*) FROM fields_meta_data WHERE TYPE LIKE '%enum%' AND (ifnull(ext1, '') = '');";
+//        $SQL = "SELECT * FROM users;";
         $Result = $this->PDO->query($SQL);
-        print_r($Result);
-        $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        print_r($Rows);
-        if(count($Rows)){
+        $Count = $Result->fetchColumn();
+        if($Count){
             utils::print_rc(" 🛑\n");
-            utils::print_rc($Rows);
+            utils::print_rc($Count);
         }else{
             utils::print_rc(" ✅\n");
         }
