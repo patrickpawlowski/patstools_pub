@@ -515,7 +515,9 @@ class sugarutils {
     private function runSugarCheckup($Command) {
         $this->echoc("Running Sugar Checkup . . .\n", 'label');
         $this->checkForEnumFieldsMissingList($Command);
+        $this->quickcheckCollation();
         
+        $this->whatsThis();
         $this->ShowMenu = false;
     }
     
@@ -974,6 +976,33 @@ WHERE parent_id IS NOT NULL
         $this->echoc($Cmd . PHP_EOL, 'command');
         system($Cmd);
         $this->ShowMenu = false;
+    }
+    
+    private function quickcheckCollation() {
+        $this->echoc("Checking collation  . . . \n", 'label');
+        $SQL = "SELECT COLLATION_NAME, count(*) COUNT FROM information_schema.COLUMNS
+                    WHERE table_schema = database()
+                    AND data_type IN ('char','varchar', 'text','tinytext','mediumtext','longtext')
+                    GROUP BY COLLATION_NAME;";
+        $Result = $this->PDO->query($SQL);
+        $Collations = $Result->fetchAll();(PDO::FETCH_ASSOC);
+        if(count($Collations) === 0){
+            $this->echoc("No collations found. Something is wrong. 🛑\n", 'red');
+        }elseif(count($Collations) === 1){
+            $this->echoc("Single collation found ✅\n", 'green');
+            if($Collations[0]['COLLATION_NAME'] === 'utf8mb4_0900_ai_ci'){
+                $this->echoc("Standard collation found ", 'label');
+                $this->echoc($Collations[0]['COLLATION_NAME'] . "✅ \n", 'green');
+            }else{
+                $this->echoc("Nonstandard collation found ", 'label');
+                $this->echoc($Collations[0]['COLLATION_NAME'] . " 🛑 \n", 'red');
+            }
+        }else{
+            $this->echoc("Multiple collations found 🛑 \n", 'red');
+            foreach ($Collations as $Collation){
+                $this->echoc("{$Collation['COLLATION_NAME']}\n", 'red');
+            }
+        }
     }
     
 
