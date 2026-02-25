@@ -679,6 +679,8 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         utils::echoc("Checking fields_meta_data for enum fields missing lists . . . ", 'label');
         $SQL = "SELECT * FROM fields_meta_data WHERE TYPE LIKE '%enum%' AND (ifnull(ext1, '') = '');";
         $Result = $this->PDO->query($SQL);
+        print_r($Result);
+        die();
         $Rows = $Result->fetch(PDO::FETCH_ASSOC);
         if(count($Rows)){
             utils::print_rc(" 🛑\n");
