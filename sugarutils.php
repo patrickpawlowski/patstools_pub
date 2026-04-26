@@ -63,7 +63,7 @@ class sugarutils {
     private $InstanceInfo = array();
     private $Subscription = array();
     private $ShowMenu = true;
-    private $TimedSQLCleanupJobFile = false;
+    private $Commands = array();
     
     const DATE_CMU = 'Y-m-d H:i T';
     const DATE_CMU_SECONDS = 'Y-m-d H:i:s T';
@@ -71,11 +71,6 @@ class sugarutils {
     public function __construct() {
         ini_set('display_errors', 1);
         error_reporting(E_ALL & ~E_WARNING & ~E_NOTICE & ~E_DEPRECATED);
-
-        global $argv;
-        if (isset($argv[1]) && $argv[1] === '--run-sql-cleanup-job' && isset($argv[2])) {
-            $this->TimedSQLCleanupJobFile = $argv[2];
-        }
 
         if (!file_exists('config.php') || !file_exists('custom') || !file_exists('cache')) {
             $this->echoc("This does not appear to be the root of a Sugar instance. Missing config.php file, custom folder, or cache folder.\n", 'red');
@@ -97,6 +92,7 @@ class sugarutils {
         require 'config_override.php';
         $this->Options = getopt('pstla');
         $this->SugarConfig = $sugar_config;
+        $this->initCommandRegistry();
         $this->testSQL();
         $this->loadInstnceInfo();
         $this->loadLicenseInfo();
@@ -112,10 +108,6 @@ class sugarutils {
     }
 
     public function run() {
-        if ($this->TimedSQLCleanupJobFile) {
-            $this->runTimedSQLCleanupJob($this->TimedSQLCleanupJobFile);
-            return;
-        }
         $this->backupConfigs();
         $this->displayMenu();
     }
@@ -189,324 +181,145 @@ class sugarutils {
         }
     }
 
+    private function initCommandRegistry() {
+        $this->Commands = array(
+            'sc' => array('label' => 'Search custom Folder', 'method' => 'searchCustomFolder', 'section' => 'Search'),
+            'sdl' => array('label' => 'Search Dropdown List', 'method' => 'searchDropdownLists', 'section' => 'Search'),
+            'su' => array('label' => 'Search upgrades/module Folder', 'method' => 'searchUpgradesFolder', 'section' => 'Search'),
+            'suz' => array('label' => 'Search upgrades/module Folder zips', 'method' => 'searchPackagesForString', 'section' => 'Search'),
+            'sm' => array('label' => 'Search Manifests', 'method' => 'searchManifests', 'section' => 'Search'),
+            'fa' => array('label' => 'Scan for Font Awesome uses', 'method' => 'scanForFontAwesomeIcons', 'section' => 'Search'),
+
+            'lu' => array('label' => 'List Users', 'method' => 'listUsers', 'section' => 'Database / Instance Info'),
+            'lau' => array('label' => 'List Admin Users', 'method' => 'getAdminUsers', 'section' => 'Database / Instance Info'),
+            'ljbs' => array('label' => 'List Jobs by Status', 'method' => 'listJobsByStatus', 'section' => 'Database / Instance Info'),
+            'cftsq' => array('label' => 'Check FTS Queue', 'method' => 'checkFTSQueue', 'section' => 'Database / Instance Info'),
+            'spl' => array('label' => 'Show Process List', 'method' => 'showProcessList', 'section' => 'Database / Instance Info'),
+            'ws' => array('label' => 'Watch SQL', 'method' => 'watchSQL', 'section' => 'Database / Instance Info'),
+            'dbms' => array('label' => 'Database Manage Space', 'method' => 'dbManageSpace', 'section' => 'Database / Instance Info'),
+            'cc' => array('label' => 'Check Collation', 'method' => 'checkCollation', 'section' => 'Database / Instance Info'),
+
+            'scu' => array('label' => 'Sugar Checkup', 'method' => 'runSugarCheckup', 'section' => 'Maintenance / Repairs'),
+            'hc' => array('label' => 'Health Check', 'method' => 'runHealthCheck', 'section' => 'Maintenance / Repairs'),
+            'qrr' => array('label' => 'Quick Repair and Rebuild', 'method' => 'runQuickRepairandRebuild', 'section' => 'Maintenance / Repairs'),
+            'rdis' => array('label' => 'Run Data Integrity Scripts', 'method' => 'runDataIntegrityScripts', 'section' => 'Maintenance / Repairs'),
+            'pm' => array('label' => 'Parse Manifest', 'method' => 'parseManifest', 'section' => 'Maintenance / Repairs'),
+            'suh' => array('label' => 'Show Upgrade History', 'method' => 'showUpgradeHistory', 'section' => 'Maintenance / Repairs'),
+            'ci' => array('label' => 'Check Imports', 'method' => 'checkImports', 'section' => 'Maintenance / Repairs'),
+            'wt' => array('label' => "What's this", 'method' => 'whatsThis', 'section' => 'Maintenance / Repairs'),
+
+            'bcmf' => array('label' => 'Backup Custom and Modules Folders', 'method' => 'backupCustomAndModulesFolders', 'section' => 'Destructive / Changes Data or Files'),
+            'dnu' => array('label' => 'Deactivate Non-admin Users', 'method' => 'deactivateNonAdminUsers', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'fc' => array('label' => 'Fix Collation', 'method' => 'fixCollation', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'huh' => array('label' => 'Hide Upgrade History', 'method' => 'hideUpgradeHistory', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'uuh' => array('label' => 'Unhide Upgrade History', 'method' => 'unhideUpgradeHistory', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'mrcj' => array('label' => 'Manually Remove Customer Journey', 'method' => 'manuallyRemoveCustomerJourney', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'rfcm' => array('label' => 'Remove Forked Core Modules', 'method' => 'removeForkedCoreModules', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+            'mu' => array('label' => 'Migrate Uploads', 'method' => 'migrateUploads', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
+
+            'sd' => array('label' => 'Start Discovery', 'method' => 'startDiscovery', 'section' => 'Message / Workflow Helpers'),
+            'gm' => array('label' => 'Generate Message', 'method' => 'generateMessage', 'section' => 'Message / Workflow Helpers'),
+            'flf' => array('label' => 'Find Large Files', 'method' => 'findLargeFiles', 'section' => 'File / Package Helpers'),
+            'ps' => array('label' => 'Package Scan', 'method' => 'packageScan', 'section' => 'File / Package Helpers'),
+
+            'cfi95922' => array('label' => '[SugarBPM] Relationship Change Start Event issue 95922', 'method' => 'checkForIssue95922', 'section' => 'Special Issues'),
+            'cfi95830' => array('label' => 'Issue 95830: Opportunity/RLI navigation breakage', 'method' => 'checkForIssue95830', 'section' => 'Special Issues'),
+            'cfi95840' => array('label' => 'Alias for cfi95830', 'method' => 'checkForIssue95830', 'section' => 'Special Issues', 'hidden' => true),
+        );
+    }
+
     private function displayMenu() {
-//        system('clear');
-//        $Option = false;
-        $LabelWidth = 40;
-        $CommandWidth = 6;
-        $TotalWidth = ($LabelWidth + $CommandWidth) * 4;
+        $LabelWidth = 48;
+        $CommandWidth = 10;
+        $TotalWidth = ($LabelWidth + $CommandWidth) * 2;
         while (true) {
             if ($this->ShowMenu) {
                 $this->echoc(str_pad("---<=== Sugar Utilities ===>---", $TotalWidth, ' ', STR_PAD_BOTH), 'brightblue');
-
                 echo PHP_EOL . PHP_EOL;
                 $this->displayInfo();
-
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Commands ===>---", $TotalWidth, '-', STR_PAD_BOTH) . str_repeat(PHP_EOL, 1), 'brightblue');
-
-                $this->echoc(str_pad('sc', $CommandWidth), 'data');
-                $this->echoc(str_pad('Search custom Folder', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('sdl', $CommandWidth), 'data');
-                $this->echoc(str_pad("Search Dropdown List", $LabelWidth), 'label');
-
-                $this->echoc(str_pad('su', $CommandWidth), 'data');
-                $this->echoc(str_pad('Search upgrades/module Folder', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('suz', $CommandWidth), 'data');
-                $this->echoc(str_pad('Search upgrades/module Folder zipz', $LabelWidth), 'label');
-
-                echo PHP_EOL;
-                $this->echoc(str_pad('scu', $CommandWidth), 'data');
-                $this->echoc(str_pad("Sugar Checkup", $LabelWidth), 'label');
-
-                $this->echoc(str_pad('pm', $CommandWidth), 'data');
-                $this->echoc(str_pad("Parse Manifest", $LabelWidth), 'label');
-
-                $this->echoc(str_pad('dnu', $CommandWidth), 'data');
-                $this->echoc(str_pad("Deactivate Non-admin Users", $LabelWidth), 'label');
-
-                echo PHP_EOL;
-                $this->echoc(str_pad('sd', $CommandWidth), 'data');
-                $this->echoc(str_pad("Start Discovery", $LabelWidth), 'label');
-
-                $this->echoc(str_pad('gm', $CommandWidth), 'data');
-                $this->echoc(str_pad('Generate Message', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('lu', $CommandWidth), 'data');
-                $this->echoc(str_pad('List Users', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('cftsq', $CommandWidth), 'data');
-                $this->echoc(str_pad('Check FTS Queue', $LabelWidth), 'label');
-
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Section ===>---", $TotalWidth, '-', STR_PAD_RIGHT) . str_repeat(PHP_EOL, 1), 'brightblue');
-
-                $this->echoc(str_pad('lau', $CommandWidth), 'data');
-                $this->echoc(str_pad("List Admin Users", $LabelWidth), 'label');
-
-                $this->echoc(str_pad('flf', $CommandWidth), 'data');
-                $this->echoc(str_pad('Find Large Files', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('ljbs', $CommandWidth), 'data');
-                $this->echoc(str_pad('List Jobs by Status', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('rdis', $CommandWidth), 'data');
-                $this->echoc(str_pad('Run Data Integrity Scripts', $LabelWidth), 'label');
-
-                echo PHP_EOL;
-                $this->echoc(str_pad('mrcj', $CommandWidth), 'data');
-                $this->echoc(str_pad('Manually Remove Customer Journey', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('spl', $CommandWidth), 'data');
-                $this->echoc(str_pad('Show Process List', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('rfcm', $CommandWidth), 'data');
-                $this->echoc(str_pad('Remove Forked Core Modules', $LabelWidth), 'label');
-
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("Section ===>---", $TotalWidth, '-', STR_PAD_RIGHT) . str_repeat(PHP_EOL, 1), 'brightblue');
-
-                $this->echoc(str_pad('bcmf', $CommandWidth), 'data');
-                $this->echoc(str_pad('Backup Custom and Modules Folders', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('suh', $CommandWidth), 'data');
-                $this->echoc(str_pad('Show Upgrade History', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('huh', $CommandWidth), 'data');
-                $this->echoc(str_pad('Hide Upgrade History', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('uuh', $CommandWidth), 'data');
-                $this->echoc(str_pad('Unhide Upgrade History', $LabelWidth), 'label');
-
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Section ===>---", $TotalWidth, '-', STR_PAD_BOTH) . str_repeat(PHP_EOL, 1), 'brightblue');
-
-                $this->echoc(str_pad('cc', $CommandWidth), 'data');
-                $this->echoc(str_pad('Check Collation', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('fc', $CommandWidth), 'data');
-                $this->echoc(str_pad('Fix Collation', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('ps', $CommandWidth), 'data');
-                $this->echoc(str_pad('Package Scan', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('hc', $CommandWidth), 'data');
-                $this->echoc(str_pad('Health Check', $LabelWidth), 'label');
-
-                echo PHP_EOL;
-
-                $this->echoc(str_pad('qrr', $CommandWidth), 'data');
-                $this->echoc(str_pad('Quick Repair and Rebuild', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('fa', $CommandWidth), 'data');
-                $this->echoc(str_pad('Scan for Font Awesome uses', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('wt', $CommandWidth), 'data');
-                $this->echoc(str_pad('What\'s this', $LabelWidth), 'label');
-
-                $this->echoc(str_pad('mu', $CommandWidth), 'data');
-                $this->echoc(str_pad('Migrate Uploads', $LabelWidth), 'label');
-
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Section ===>---", $TotalWidth, '-', STR_PAD_BOTH) . str_repeat(PHP_EOL, 1), 'brightblue');
-                $this->echoc(str_pad('ci', $CommandWidth), 'data');
-                $this->echoc(str_pad('Check Imports', $LabelWidth), 'label');
-                
-                $this->echoc(str_pad('sm', $CommandWidth), 'data');
-                $this->echoc(str_pad('Search Manifests', $LabelWidth), 'label');
-                
-                $this->echoc(str_pad('ws', $CommandWidth), 'data');
-                $this->echoc(str_pad('Watch SQL', $LabelWidth), 'label');
-                
-                $this->echoc(str_pad('dbms', $CommandWidth), 'data');
-                $this->echoc(str_pad('Database Manage Space', $LabelWidth), 'label');
-
-                echo PHP_EOL;
-                $this->echoc(str_pad('rsql', $CommandWidth), 'data');
-                $this->echoc(str_pad('Run Timed SQL Cleanup', $LabelWidth), 'label');
-                
-                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Special Issues ===>---", $TotalWidth, '-', STR_PAD_BOTH) . str_repeat(PHP_EOL, 1), 'brightblue');
-                $this->echoc("cfi95922 ", 'data');
-                $this->echoc("[SugarBPM] Using Relationship Change in Start Event results in BPM being triggered despite no relationship change\n", 'label');
-                
-                echo PHP_EOL;
-                $this->echoc("cfi95840 ", 'data');
-                $this->echoc("95840 Changing to Opportunities only and then clicking save in Navigation Bar and Subpanels breaks the recordview of every module in which RLI appeared\n", 'label');
-                
-                echo PHP_EOL;
-                $this->echoc(str_pad('q', $CommandWidth), 'data');
-                $this->echoc(str_pad('Quit', $LabelWidth), 'label');
-                echo PHP_EOL;
+                $this->displayCommandMenu($LabelWidth, $CommandWidth, $TotalWidth);
                 $this->displayWarnings();
                 $Command = $this->ask("Enter Command: ");
             } else {
                 $this->displayWarnings();
                 $Command = $this->ask("Enter Command or press enter to display the menu: ");
             }
-
             $this->ShowMenu = true;
-
-            $Option = strtolower(explode(' ', $Command)[0]);
-//            $this->echoc($Option.PHP_EOL, 'red');
-            switch ($Option) {
-                case 'sc':
-                    $this->searchCustomFolder($Command);
-                    break;
-
-                case 'sdl':
-                    $this->searchDropdownLists($Command);
-                    break;
-
-                case 'su':
-                    $this->searchUpgradesFolder($Command);
-                    break;
-
-                case 'suz':
-                    $this->searchPackagesForString($Command);
-                    break;
-
-                case 'pm':
-                    $this->parseManifest($Command);
-                    break;
-
-                case 'sd':
-                    $this->startDiscovery();
-                    break;
-
-                case 'gm':
-                    $this->generateMessage();
-                    break;
-
-                case 'lu':
-                    $this->listUsers();
-                    break;
-
-                case 'lau':
-                    $this->getAdminUsers();
-                    break;
-
-                case 'flf':
-                    $this->findLargeFiles();
-                    break;
-
-                case 'ljbs':
-                    $this->listJobsByStatus();
-                    break;
-
-                case 'mrcj':
-                    $this->manuallyRemoveCustomerJourney();
-                    break;
-
-                case 'rfcm':
-                    $this->removeForkedCoreModules();
-                    break;
-
-                case 'spl':
-                    $this->showProcessList();
-                    break;
-
-                case 'bcmf':
-                    $this->backupCustomAndModulesFolders();
-                    break;
-
-                case 'suh':
-                    $this->showUpgradeHistory();
-                    break;
-
-                case 'huh':
-                    $this->hideUpgradeHistory();
-                    break;
-
-                case 'uuh':
-                    $this->unhideUpgradeHistory();
-                    break;
-
-                case 'cc':
-                    $this->checkCollation();
-                    break;
-
-                case 'fc':
-                    $this->fixCollation();
-                    break;
-
-                case 'ps':
-                    $this->packageScan();
-                    break;
-
-                case 'hc':
-                    $this->runHealthCheck();
-                    break;
-
-                case 'wt':
-                    $this->whatsThis();
-                    break;
-
-                case 'cftsq':
-                    $this->checkFTSQueue();
-                    break;
-
-                case 'rdis':
-                    $this->runDataIntegrityScripts();
-                    break;
-
-                case 'qrr':
-                    $this->runQuickRepairandRebuild();
-                    break;
-
-                case 'fa':
-                    $this->scanForFontAwesomeIcons();
-                    break;
-
-                case 'dnu':
-                    $this->deactivateNonAdminUsers();
-                    break;
-
-                case 'mu':
-                    $this->migrateUploads();
-                    break;
-
-                case 'ci':
-                    $this->checkImports();
-                    break;
-
-                case 'ws':
-                    $this->watchSQL($Command);
-                    break;
-
-                case 'scu':
-                    $this->runSugarCheckup($Command);
-                    break;
-
-                case 'sm':
-                    $this->searchManifests($Command);
-                    break;
-
-                case 'dbms':
-                    $this->dbManageSpace($Command);
-                    break;
-
-                case 'rsql':
-                    $this->runTimedSQLCleanup($Command);
-                    break;
-
-                case 'cfi95922':
-                    $this->checkForIssue95922();
-                    break;
-
-                case 'cfi95830':
-                    $this->checkForIssue95830();
-                    break;
-
-                case 'q':
-                case 'exit':
-                    exit();
-                    break;
-
-                default:
-                    $this->echoc("Command '{$Command}' not found!\n", 'red');
-                    $Command = false;
-                    break;
-            }
+            $this->dispatchCommand($Command);
         }
     }
-    
+
+    private function displayCommandMenu($LabelWidth, $CommandWidth, $TotalWidth) {
+        $CurrentSection = '';
+        $Column = 0;
+        foreach ($this->Commands as $Command => $Config) {
+            if (!empty($Config['hidden'])) {
+                continue;
+            }
+            $Section = isset($Config['section']) ? $Config['section'] : 'Commands';
+            if ($Section !== $CurrentSection) {
+                if ($Column !== 0) {
+                    echo PHP_EOL;
+                    $Column = 0;
+                }
+                $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== {$Section} ===>---", $TotalWidth, '-', STR_PAD_BOTH) . PHP_EOL, 'brightblue');
+                $CurrentSection = $Section;
+            }
+            $Label = !empty($Config['dangerous']) ? "{$Config['label']} *" : $Config['label'];
+            $this->echoc(str_pad($Command, $CommandWidth), 'data');
+            $this->echoc(str_pad($Label, $LabelWidth), 'label');
+            $Column++;
+            if ($Column >= 2) {
+                echo PHP_EOL;
+                $Column = 0;
+            }
+        }
+        if ($Column !== 0) {
+            echo PHP_EOL;
+        }
+        $this->echoc(str_repeat(PHP_EOL, 1) . str_pad('q', $CommandWidth), 'data');
+        $this->echoc(str_pad('Quit', $LabelWidth), 'label');
+        echo PHP_EOL;
+        $this->echoc("* Potentially destructive command. A confirmation prompt will be shown before it runs.\n", 'bad');
+    }
+
+    private function dispatchCommand($Command) {
+        $Option = strtolower(explode(' ', trim($Command))[0]);
+        if ($Option === '') {
+            return;
+        }
+        if ($Option === 'q' || $Option === 'exit') {
+            exit();
+        }
+        if (empty($this->Commands[$Option])) {
+            $this->echoc("Command '{$Command}' not found!\n", 'red');
+            return;
+        }
+        $Config = $this->Commands[$Option];
+        $Method = $Config['method'];
+        if (!method_exists($this, $Method)) {
+            $this->echoc("Command '{$Option}' is configured for missing method '{$Method}'.\n", 'bad');
+            return;
+        }
+        if (!empty($Config['dangerous']) && !$this->confirmDangerousCommand($Option, $Config)) {
+            $this->echoc("Command '{$Option}' cancelled.\n", 'bad');
+            $this->ShowMenu = false;
+            return;
+        }
+        $Reflection = new ReflectionMethod($this, $Method);
+        if ($Reflection->getNumberOfParameters() > 0) {
+            $this->$Method($Command);
+        } else {
+            $this->$Method();
+        }
+    }
+
+    private function confirmDangerousCommand($Option, $Config) {
+        $this->echoc("\n*** WARNING ***\n", 'bad');
+        $this->echoc("'{$Option}' - {$Config['label']} is potentially destructive.\n", 'bad');
+        $this->echoc("This command may change data, modify files, remove files, or make the Sugar instance unusable until follow-up work is completed.\n", 'bad');
+        return $this->askYes("Type 'yes' to continue.");
+    }
     private function runSugarExplorer() {
         if (!defined('sugarEntry')){
             define('sugarEntry', true);
@@ -539,359 +352,6 @@ class sugarutils {
         $this->ShowMenu = false;
     }
     
-    private function runTimedSQLCleanup($Command) {
-        $CommandArray = explode(' ', $Command);
-        $CommandArray[0] = '';
-        $SQLFile = trim(implode(' ', $CommandArray));
-        if (!$SQLFile) {
-            $SQLFile = $this->ask("SQL cleanup file path:");
-        }
-
-        if (!file_exists($SQLFile) || !is_readable($SQLFile)) {
-            $this->echoc("SQL file '{$SQLFile}' was not found or is not readable.\n", 'bad');
-            $this->ShowMenu = false;
-            return;
-        }
-
-        $StopOnError = $this->askYN("Stop on SQL errors?", 'Y');
-        $RunInBackground = $this->askYN("Run in background with nohup?", 'Y');
-        $Timestamp = date('Ymd_His');
-        if (!is_dir('cloud_support')) {
-            mkdir('cloud_support', 0755, true);
-        }
-
-        $Base = 'sql_cleanup_' . $Timestamp;
-        $LogFile = "cloud_support/{$Base}.log";
-        $ConsoleLogFile = "cloud_support/{$Base}.console.log";
-        $JobFile = "cloud_support/{$Base}.json";
-        $MonitorFile = "cloud_support/{$Base}.monitor.sh";
-
-        $Job = array(
-            'sql_file' => realpath($SQLFile),
-            'stop_on_error' => $StopOnError,
-            'log_file' => getcwd() . '/' . $LogFile,
-            'console_log_file' => getcwd() . '/' . $ConsoleLogFile,
-            'created_at' => date(self::DATE_CMU_SECONDS),
-            'created_by' => get_current_user(),
-            'cwd' => getcwd(),
-            'instance' => $this->InstanceInfo,
-        );
-        file_put_contents($JobFile, json_encode($Job, JSON_PRETTY_PRINT));
-        $this->writeTimedSQLMonitorFile($MonitorFile, $LogFile);
-
-        $this->echoc("SQL cleanup job prepared.\n", 'good');
-        $this->echoc("SQL file: ", 'label');
-        $this->echoc($SQLFile . PHP_EOL, 'data');
-        $this->echoc("Log file: ", 'label');
-        $this->echoc($LogFile . PHP_EOL, 'data');
-        $this->echoc("Monitor helper: ", 'label');
-        $this->echoc($MonitorFile . PHP_EOL, 'data');
-
-        if ($RunInBackground) {
-            $Script = isset($_SERVER['SCRIPT_FILENAME']) ? $_SERVER['SCRIPT_FILENAME'] : __FILE__;
-            $Cmd = 'nohup php ' . escapeshellarg($Script) . ' --run-sql-cleanup-job ' . escapeshellarg(getcwd() . '/' . $JobFile) . ' >> ' . escapeshellarg($ConsoleLogFile) . ' 2>&1 & echo $!';
-            $this->echoc("Starting background job . . .\n", 'label');
-            $this->echoc($Cmd . PHP_EOL, 'command');
-            $Pid = trim(shell_exec($Cmd));
-            if ($Pid) {
-                file_put_contents($JobFile . '.pid', $Pid . PHP_EOL);
-                $this->echoc("Background PID: ", 'label');
-                $this->echoc($Pid . PHP_EOL, 'data');
-            }
-            $this->printTimedSQLMonitorHelp($LogFile, $MonitorFile);
-            $this->ShowMenu = false;
-            return;
-        }
-
-        $this->executeTimedSQLCleanupJob($Job);
-        $this->printTimedSQLMonitorHelp($LogFile, $MonitorFile);
-        $this->ShowMenu = false;
-    }
-
-    private function runTimedSQLCleanupJob($JobFile) {
-        if (!file_exists($JobFile)) {
-            echo "Timed SQL cleanup job file not found: {$JobFile}" . PHP_EOL;
-            return;
-        }
-        $Job = json_decode(file_get_contents($JobFile), true);
-        if (!$Job) {
-            echo "Timed SQL cleanup job file could not be read: {$JobFile}" . PHP_EOL;
-            return;
-        }
-        $this->executeTimedSQLCleanupJob($Job);
-    }
-
-    private function executeTimedSQLCleanupJob($Job) {
-        $SQLFile = $Job['sql_file'];
-        $LogFile = $Job['log_file'];
-        $StopOnError = !empty($Job['stop_on_error']);
-        $SQLText = file_get_contents($SQLFile);
-        $Sections = $this->parseTimedSQLSections($SQLText);
-        $TotalStatements = 0;
-        foreach ($Sections as $Section) {
-            $TotalStatements += count($Section['statements']);
-        }
-
-        $this->timedSQLLog($LogFile, str_repeat('=', 80));
-        $this->timedSQLLog($LogFile, 'START SQL cleanup');
-        $this->timedSQLLog($LogFile, 'Instance: ' . ($this->InstanceInfo['INSTANCE'] ?? 'unknown'));
-        $this->timedSQLLog($LogFile, 'Host: ' . gethostname());
-        $this->timedSQLLog($LogFile, 'Database: ' . ($this->SugarConfig['dbconfig']['db_name'] ?? 'unknown'));
-        $this->timedSQLLog($LogFile, 'SQL file: ' . $SQLFile);
-        $this->timedSQLLog($LogFile, 'Stop on error: ' . ($StopOnError ? 'yes' : 'no'));
-        $this->timedSQLLog($LogFile, 'Sections: ' . count($Sections));
-        $this->timedSQLLog($LogFile, 'Statements: ' . $TotalStatements);
-        $this->timedSQLLog($LogFile, str_repeat('=', 80));
-
-        $TotalStart = microtime(true);
-        $StatementNumber = 0;
-        $Errors = 0;
-        $Abort = false;
-
-        foreach ($Sections as $SectionNumber => $Section) {
-            if ($Abort) {
-                break;
-            }
-            $SectionName = $Section['name'];
-            $SectionStart = microtime(true);
-            $this->timedSQLLog($LogFile, "SECTION START " . ($SectionNumber + 1) . '/' . count($Sections) . " {$SectionName}");
-
-            foreach ($Section['statements'] as $Statement) {
-                $StatementNumber++;
-                $OneLineSQL = $this->summarizeSQL($Statement['sql']);
-                $this->timedSQLLog($LogFile, "RUNNING statement {$StatementNumber}/{$TotalStatements} section=\"{$SectionName}\" line={$Statement['line']} sql=\"{$OneLineSQL}\"");
-                $Start = microtime(true);
-                try {
-                    $Result = $this->PDO->query($Statement['sql']);
-                    $Elapsed = microtime(true) - $Start;
-                    $Rows = 'n/a';
-                    if ($Result instanceof PDOStatement) {
-                        $Rows = $Result->rowCount();
-                        $InfoRows = $this->fetchInformationalResultRows($Result);
-                        if (!empty($InfoRows)) {
-                            $this->timedSQLLog($LogFile, 'INFO result=' . json_encode($InfoRows));
-                        }
-                    }
-                    $this->timedSQLLog($LogFile, 'OK ' . $this->formatSeconds($Elapsed) . " rows={$Rows} sql=\"{$OneLineSQL}\"");
-                } catch (Exception $e) {
-                    $Elapsed = microtime(true) - $Start;
-                    $Errors++;
-                    $this->timedSQLLog($LogFile, 'FAIL ' . $this->formatSeconds($Elapsed) . " sql=\"{$OneLineSQL}\" error=\"" . $this->cleanLogText($e->getMessage()) . '"');
-                    if ($StopOnError) {
-                        $this->timedSQLLog($LogFile, 'ABORTING because stop-on-error is enabled.');
-                        $Abort = true;
-                        break;
-                    }
-                }
-            }
-
-            $SectionElapsed = microtime(true) - $SectionStart;
-            $this->timedSQLLog($LogFile, "SECTION DONE {$SectionName} " . $this->formatSeconds($SectionElapsed));
-        }
-
-        $TotalElapsed = microtime(true) - $TotalStart;
-        $Status = $Errors ? ($Abort ? 'FAILED_ABORTED' : 'COMPLETED_WITH_ERRORS') : 'SUCCESS';
-        $this->timedSQLLog($LogFile, str_repeat('=', 80));
-        $this->timedSQLLog($LogFile, "DONE status={$Status} errors={$Errors} total=" . $this->formatSeconds($TotalElapsed));
-        $this->timedSQLLog($LogFile, str_repeat('=', 80));
-    }
-
-    private function parseTimedSQLSections($SQLText) {
-        $Statements = $this->splitSQLStatements($SQLText);
-        $Sections = array();
-        $CurrentSection = 'Unsectioned';
-        foreach ($Statements as $Statement) {
-            foreach ($Statement['comments'] as $Comment) {
-                if (preg_match('/^\s*(?:--|#)\s*@section\s+(.+)$/i', trim($Comment), $Matches)) {
-                    $CurrentSection = trim($Matches[1]);
-                }
-            }
-            if (!isset($Sections[$CurrentSection])) {
-                $Sections[$CurrentSection] = array('name' => $CurrentSection, 'statements' => array());
-            }
-            if (trim($Statement['sql']) !== '') {
-                $Sections[$CurrentSection]['statements'][] = $Statement;
-            }
-        }
-        return array_values(array_filter($Sections, function($Section) {
-            return !empty($Section['statements']);
-        }));
-    }
-
-    private function splitSQLStatements($SQLText) {
-        $Statements = array();
-        $CommentsSinceLastStatement = array();
-        $Buffer = '';
-        $Line = 1;
-        $StatementLine = 1;
-        $Length = strlen($SQLText);
-        $Quote = false;
-        $Escape = false;
-        $LineComment = false;
-        $BlockComment = false;
-        $LineCommentBuffer = '';
-        $BlockCommentBuffer = '';
-
-        for ($i = 0; $i < $Length; $i++) {
-            $Char = $SQLText[$i];
-            $Next = ($i + 1 < $Length) ? $SQLText[$i + 1] : '';
-
-            if ($Char === "\n") {
-                $Line++;
-            }
-
-            if ($LineComment) {
-                $LineCommentBuffer .= $Char;
-                if ($Char === "\n") {
-                    $CommentsSinceLastStatement[] = trim($LineCommentBuffer);
-                    $LineComment = false;
-                    $LineCommentBuffer = '';
-                }
-                continue;
-            }
-
-            if ($BlockComment) {
-                $BlockCommentBuffer .= $Char;
-                if ($Char === '*' && $Next === '/') {
-                    $BlockCommentBuffer .= $Next;
-                    $i++;
-                    $CommentsSinceLastStatement[] = trim($BlockCommentBuffer);
-                    $BlockComment = false;
-                    $BlockCommentBuffer = '';
-                }
-                continue;
-            }
-
-            if ($Quote) {
-                $Buffer .= $Char;
-                if ($Escape) {
-                    $Escape = false;
-                } elseif ($Char === '\\') {
-                    $Escape = true;
-                } elseif ($Char === $Quote) {
-                    $Quote = false;
-                }
-                continue;
-            }
-
-            if ($Char === '-' && $Next === '-') {
-                $Prev = ($i === 0) ? "\n" : $SQLText[$i - 1];
-                $After = ($i + 2 < $Length) ? $SQLText[$i + 2] : '';
-                if (($Prev === "\n" || trim($Prev) === '') && ($After === ' ' || $After === "\t" || $After === "\r")) {
-                    $LineComment = true;
-                    $LineCommentBuffer = '--';
-                    $i++;
-                    continue;
-                }
-            }
-            if ($Char === '#') {
-                $LineComment = true;
-                $LineCommentBuffer = '#';
-                continue;
-            }
-            if ($Char === '/' && $Next === '*') {
-                $BlockComment = true;
-                $BlockCommentBuffer = '/*';
-                $i++;
-                continue;
-            }
-            if ($Char === "'" || $Char === '"' || $Char === '`') {
-                $Quote = $Char;
-                $Buffer .= $Char;
-                continue;
-            }
-            if ($Char === ';') {
-                $SQL = trim($Buffer);
-                if ($SQL !== '') {
-                    $Statements[] = array('sql' => $SQL, 'line' => $StatementLine, 'comments' => $CommentsSinceLastStatement);
-                    $CommentsSinceLastStatement = array();
-                }
-                $Buffer = '';
-                $StatementLine = $Line;
-                continue;
-            }
-            if ($Buffer === '' && trim($Char) !== '') {
-                $StatementLine = $Line;
-            }
-            $Buffer .= $Char;
-        }
-        if ($LineCommentBuffer !== '') {
-            $CommentsSinceLastStatement[] = trim($LineCommentBuffer);
-        }
-        $SQL = trim($Buffer);
-        if ($SQL !== '') {
-            $Statements[] = array('sql' => $SQL, 'line' => $StatementLine, 'comments' => $CommentsSinceLastStatement);
-        }
-        return $Statements;
-    }
-
-    private function timedSQLLog($LogFile, $Message) {
-        $Line = '[' . date(self::DATE_CMU_SECONDS) . '] ' . $Message . PHP_EOL;
-        file_put_contents($LogFile, $Line, FILE_APPEND);
-        $Color = 'data';
-        if (strpos($Message, 'FAIL') === 0 || strpos($Message, 'ABORT') === 0) {
-            $Color = 'bad';
-        } elseif (strpos($Message, 'OK') === 0 || strpos($Message, 'DONE status=SUCCESS') === 0) {
-            $Color = 'good';
-        } elseif (strpos($Message, 'SECTION') === 0 || strpos($Message, 'START') === 0) {
-            $Color = 'label';
-        }
-        $this->echoc($Line, $Color);
-    }
-
-    private function summarizeSQL($SQL) {
-        $SQL = preg_replace('/\s+/', ' ', trim($SQL));
-        if (strlen($SQL) > 220) {
-            return substr($SQL, 0, 217) . '...';
-        }
-        return $SQL;
-    }
-
-    private function cleanLogText($Text) {
-        return str_replace(array("\r", "\n", '"'), array(' ', ' ', "'"), $Text);
-    }
-
-    private function formatSeconds($Seconds) {
-        if ($Seconds < 60) {
-            return number_format($Seconds, 3) . 's';
-        }
-        $Minutes = floor($Seconds / 60);
-        $Remaining = $Seconds - ($Minutes * 60);
-        return $Minutes . 'm ' . number_format($Remaining, 3) . 's';
-    }
-
-    private function fetchInformationalResultRows($Result) {
-        try {
-            $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-            if (count($Rows) > 10) {
-                return array_slice($Rows, 0, 10);
-            }
-            return $Rows;
-        } catch (Exception $e) {
-            return array();
-        }
-    }
-
-    private function writeTimedSQLMonitorFile($MonitorFile, $LogFile) {
-        $Mysql = "mysql -u" . escapeshellarg($this->SugarConfig['dbconfig']['db_user_name']) . " -p" . escapeshellarg($this->SugarConfig['dbconfig']['db_password']) . " -h" . escapeshellarg($this->SugarConfig['dbconfig']['db_host_name']) . " " . escapeshellarg($this->SugarConfig['dbconfig']['db_name']);
-        $Content = "#! /usr/bin/env bash\n";
-        $Content .= "echo 'Log:'\n";
-        $Content .= "echo '  tail -f {$LogFile}'\n";
-        $Content .= "echo\n";
-        $Content .= "echo 'Database process list:'\n";
-        $Content .= "echo '  watch -n 5 \"{$Mysql} -e \\\"show full processlist;\\\"\"'\n";
-        $Content .= "echo\n";
-        $Content .= "echo 'Process:'\n";
-        $Content .= "echo '  htop --filter sugarutils'\n";
-        file_put_contents($MonitorFile, $Content);
-        chmod($MonitorFile, 0755);
-    }
-
-    private function printTimedSQLMonitorHelp($LogFile, $MonitorFile) {
-        $this->echoc("\nMonitor with:\n", 'label');
-        $this->echoc("tail -f {$LogFile}\n", 'command');
-        $this->echoc("bash {$MonitorFile}\n", 'command');
-    }
     private function dbManageSpace() {
         $this->echoc("{$this->InstanceInfo['INSTANCE']}_database_analysis.md\n\n", 'data');
         $this->echoc("\n#### Entire Database\n", 'label');
@@ -1987,7 +1447,6 @@ WHERE parent_id IS NOT NULL
         $dsn = "mysql:host={$this->SugarConfig['dbconfig']['db_host_name']};dbname={$this->SugarConfig['dbconfig']['db_name']}{$db_port}";
         try {
             $this->PDO = new PDO($dsn, $this->SugarConfig['dbconfig']['db_user_name'], $this->SugarConfig['dbconfig']['db_password']);
-            $this->PDO->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $stmt = $this->PDO->query('SELECT @@version');
             $row = $stmt->fetch();
         } catch (PDOException $e) {
