@@ -63,6 +63,7 @@ class sugarutils {
     private $InstanceInfo = array();
     private $Subscription = array();
     private $ShowMenu = true;
+    private $TimedSQLCleanupJobFile = false;
     
     const DATE_CMU = 'Y-m-d H:i T';
     const DATE_CMU_SECONDS = 'Y-m-d H:i:s T';
@@ -70,6 +71,11 @@ class sugarutils {
     public function __construct() {
         ini_set('display_errors', 1);
         error_reporting(E_ALL & ~E_WARNING & ~E_NOTICE & ~E_DEPRECATED);
+
+        global $argv;
+        if (isset($argv[1]) && $argv[1] === '--run-sql-cleanup-job' && isset($argv[2])) {
+            $this->TimedSQLCleanupJobFile = $argv[2];
+        }
 
         if (!file_exists('config.php') || !file_exists('custom') || !file_exists('cache')) {
             $this->echoc("This does not appear to be the root of a Sugar instance. Missing config.php file, custom folder, or cache folder.\n", 'red');
@@ -106,6 +112,10 @@ class sugarutils {
     }
 
     public function run() {
+        if ($this->TimedSQLCleanupJobFile) {
+            $this->runTimedSQLCleanupJob($this->TimedSQLCleanupJobFile);
+            return;
+        }
         $this->backupConfigs();
         $this->displayMenu();
     }
@@ -307,6 +317,10 @@ class sugarutils {
                 
                 $this->echoc(str_pad('dbms', $CommandWidth), 'data');
                 $this->echoc(str_pad('Database Manage Space', $LabelWidth), 'label');
+
+                echo PHP_EOL;
+                $this->echoc(str_pad('rsql', $CommandWidth), 'data');
+                $this->echoc(str_pad('Run Timed SQL Cleanup', $LabelWidth), 'label');
                 
                 $this->echoc(str_repeat(PHP_EOL, 2) . str_pad("---<=== Special Issues ===>---", $TotalWidth, '-', STR_PAD_BOTH) . str_repeat(PHP_EOL, 1), 'brightblue');
                 $this->echoc("cfi95922 ", 'data');
@@ -468,6 +482,10 @@ class sugarutils {
                     $this->dbManageSpace($Command);
                     break;
 
+                case 'rsql':
+                    $this->runTimedSQLCleanup($Command);
+                    break;
+
                 case 'cfi95922':
                     $this->checkForIssue95922();
                     break;
@@ -521,6 +539,359 @@ class sugarutils {
         $this->ShowMenu = false;
     }
     
+    private function runTimedSQLCleanup($Command) {
+        $CommandArray = explode(' ', $Command);
+        $CommandArray[0] = '';
+        $SQLFile = trim(implode(' ', $CommandArray));
+        if (!$SQLFile) {
+            $SQLFile = $this->ask("SQL cleanup file path:");
+        }
+
+        if (!file_exists($SQLFile) || !is_readable($SQLFile)) {
+            $this->echoc("SQL file '{$SQLFile}' was not found or is not readable.\n", 'bad');
+            $this->ShowMenu = false;
+            return;
+        }
+
+        $StopOnError = $this->askYN("Stop on SQL errors?", 'Y');
+        $RunInBackground = $this->askYN("Run in background with nohup?", 'Y');
+        $Timestamp = date('Ymd_His');
+        if (!is_dir('cloud_support')) {
+            mkdir('cloud_support', 0755, true);
+        }
+
+        $Base = 'sql_cleanup_' . $Timestamp;
+        $LogFile = "cloud_support/{$Base}.log";
+        $ConsoleLogFile = "cloud_support/{$Base}.console.log";
+        $JobFile = "cloud_support/{$Base}.json";
+        $MonitorFile = "cloud_support/{$Base}.monitor.sh";
+
+        $Job = array(
+            'sql_file' => realpath($SQLFile),
+            'stop_on_error' => $StopOnError,
+            'log_file' => getcwd() . '/' . $LogFile,
+            'console_log_file' => getcwd() . '/' . $ConsoleLogFile,
+            'created_at' => date(self::DATE_CMU_SECONDS),
+            'created_by' => get_current_user(),
+            'cwd' => getcwd(),
+            'instance' => $this->InstanceInfo,
+        );
+        file_put_contents($JobFile, json_encode($Job, JSON_PRETTY_PRINT));
+        $this->writeTimedSQLMonitorFile($MonitorFile, $LogFile);
+
+        $this->echoc("SQL cleanup job prepared.\n", 'good');
+        $this->echoc("SQL file: ", 'label');
+        $this->echoc($SQLFile . PHP_EOL, 'data');
+        $this->echoc("Log file: ", 'label');
+        $this->echoc($LogFile . PHP_EOL, 'data');
+        $this->echoc("Monitor helper: ", 'label');
+        $this->echoc($MonitorFile . PHP_EOL, 'data');
+
+        if ($RunInBackground) {
+            $Script = isset($_SERVER['SCRIPT_FILENAME']) ? $_SERVER['SCRIPT_FILENAME'] : __FILE__;
+            $Cmd = 'nohup php ' . escapeshellarg($Script) . ' --run-sql-cleanup-job ' . escapeshellarg(getcwd() . '/' . $JobFile) . ' >> ' . escapeshellarg($ConsoleLogFile) . ' 2>&1 & echo $!';
+            $this->echoc("Starting background job . . .\n", 'label');
+            $this->echoc($Cmd . PHP_EOL, 'command');
+            $Pid = trim(shell_exec($Cmd));
+            if ($Pid) {
+                file_put_contents($JobFile . '.pid', $Pid . PHP_EOL);
+                $this->echoc("Background PID: ", 'label');
+                $this->echoc($Pid . PHP_EOL, 'data');
+            }
+            $this->printTimedSQLMonitorHelp($LogFile, $MonitorFile);
+            $this->ShowMenu = false;
+            return;
+        }
+
+        $this->executeTimedSQLCleanupJob($Job);
+        $this->printTimedSQLMonitorHelp($LogFile, $MonitorFile);
+        $this->ShowMenu = false;
+    }
+
+    private function runTimedSQLCleanupJob($JobFile) {
+        if (!file_exists($JobFile)) {
+            echo "Timed SQL cleanup job file not found: {$JobFile}" . PHP_EOL;
+            return;
+        }
+        $Job = json_decode(file_get_contents($JobFile), true);
+        if (!$Job) {
+            echo "Timed SQL cleanup job file could not be read: {$JobFile}" . PHP_EOL;
+            return;
+        }
+        $this->executeTimedSQLCleanupJob($Job);
+    }
+
+    private function executeTimedSQLCleanupJob($Job) {
+        $SQLFile = $Job['sql_file'];
+        $LogFile = $Job['log_file'];
+        $StopOnError = !empty($Job['stop_on_error']);
+        $SQLText = file_get_contents($SQLFile);
+        $Sections = $this->parseTimedSQLSections($SQLText);
+        $TotalStatements = 0;
+        foreach ($Sections as $Section) {
+            $TotalStatements += count($Section['statements']);
+        }
+
+        $this->timedSQLLog($LogFile, str_repeat('=', 80));
+        $this->timedSQLLog($LogFile, 'START SQL cleanup');
+        $this->timedSQLLog($LogFile, 'Instance: ' . ($this->InstanceInfo['INSTANCE'] ?? 'unknown'));
+        $this->timedSQLLog($LogFile, 'Host: ' . gethostname());
+        $this->timedSQLLog($LogFile, 'Database: ' . ($this->SugarConfig['dbconfig']['db_name'] ?? 'unknown'));
+        $this->timedSQLLog($LogFile, 'SQL file: ' . $SQLFile);
+        $this->timedSQLLog($LogFile, 'Stop on error: ' . ($StopOnError ? 'yes' : 'no'));
+        $this->timedSQLLog($LogFile, 'Sections: ' . count($Sections));
+        $this->timedSQLLog($LogFile, 'Statements: ' . $TotalStatements);
+        $this->timedSQLLog($LogFile, str_repeat('=', 80));
+
+        $TotalStart = microtime(true);
+        $StatementNumber = 0;
+        $Errors = 0;
+        $Abort = false;
+
+        foreach ($Sections as $SectionNumber => $Section) {
+            if ($Abort) {
+                break;
+            }
+            $SectionName = $Section['name'];
+            $SectionStart = microtime(true);
+            $this->timedSQLLog($LogFile, "SECTION START " . ($SectionNumber + 1) . '/' . count($Sections) . " {$SectionName}");
+
+            foreach ($Section['statements'] as $Statement) {
+                $StatementNumber++;
+                $OneLineSQL = $this->summarizeSQL($Statement['sql']);
+                $this->timedSQLLog($LogFile, "RUNNING statement {$StatementNumber}/{$TotalStatements} section=\"{$SectionName}\" line={$Statement['line']} sql=\"{$OneLineSQL}\"");
+                $Start = microtime(true);
+                try {
+                    $Result = $this->PDO->query($Statement['sql']);
+                    $Elapsed = microtime(true) - $Start;
+                    $Rows = 'n/a';
+                    if ($Result instanceof PDOStatement) {
+                        $Rows = $Result->rowCount();
+                        $InfoRows = $this->fetchInformationalResultRows($Result);
+                        if (!empty($InfoRows)) {
+                            $this->timedSQLLog($LogFile, 'INFO result=' . json_encode($InfoRows));
+                        }
+                    }
+                    $this->timedSQLLog($LogFile, 'OK ' . $this->formatSeconds($Elapsed) . " rows={$Rows} sql=\"{$OneLineSQL}\"");
+                } catch (Exception $e) {
+                    $Elapsed = microtime(true) - $Start;
+                    $Errors++;
+                    $this->timedSQLLog($LogFile, 'FAIL ' . $this->formatSeconds($Elapsed) . " sql=\"{$OneLineSQL}\" error=\"" . $this->cleanLogText($e->getMessage()) . '"');
+                    if ($StopOnError) {
+                        $this->timedSQLLog($LogFile, 'ABORTING because stop-on-error is enabled.');
+                        $Abort = true;
+                        break;
+                    }
+                }
+            }
+
+            $SectionElapsed = microtime(true) - $SectionStart;
+            $this->timedSQLLog($LogFile, "SECTION DONE {$SectionName} " . $this->formatSeconds($SectionElapsed));
+        }
+
+        $TotalElapsed = microtime(true) - $TotalStart;
+        $Status = $Errors ? ($Abort ? 'FAILED_ABORTED' : 'COMPLETED_WITH_ERRORS') : 'SUCCESS';
+        $this->timedSQLLog($LogFile, str_repeat('=', 80));
+        $this->timedSQLLog($LogFile, "DONE status={$Status} errors={$Errors} total=" . $this->formatSeconds($TotalElapsed));
+        $this->timedSQLLog($LogFile, str_repeat('=', 80));
+    }
+
+    private function parseTimedSQLSections($SQLText) {
+        $Statements = $this->splitSQLStatements($SQLText);
+        $Sections = array();
+        $CurrentSection = 'Unsectioned';
+        foreach ($Statements as $Statement) {
+            foreach ($Statement['comments'] as $Comment) {
+                if (preg_match('/^\s*(?:--|#)\s*@section\s+(.+)$/i', trim($Comment), $Matches)) {
+                    $CurrentSection = trim($Matches[1]);
+                }
+            }
+            if (!isset($Sections[$CurrentSection])) {
+                $Sections[$CurrentSection] = array('name' => $CurrentSection, 'statements' => array());
+            }
+            if (trim($Statement['sql']) !== '') {
+                $Sections[$CurrentSection]['statements'][] = $Statement;
+            }
+        }
+        return array_values(array_filter($Sections, function($Section) {
+            return !empty($Section['statements']);
+        }));
+    }
+
+    private function splitSQLStatements($SQLText) {
+        $Statements = array();
+        $CommentsSinceLastStatement = array();
+        $Buffer = '';
+        $Line = 1;
+        $StatementLine = 1;
+        $Length = strlen($SQLText);
+        $Quote = false;
+        $Escape = false;
+        $LineComment = false;
+        $BlockComment = false;
+        $LineCommentBuffer = '';
+        $BlockCommentBuffer = '';
+
+        for ($i = 0; $i < $Length; $i++) {
+            $Char = $SQLText[$i];
+            $Next = ($i + 1 < $Length) ? $SQLText[$i + 1] : '';
+
+            if ($Char === "\n") {
+                $Line++;
+            }
+
+            if ($LineComment) {
+                $LineCommentBuffer .= $Char;
+                if ($Char === "\n") {
+                    $CommentsSinceLastStatement[] = trim($LineCommentBuffer);
+                    $LineComment = false;
+                    $LineCommentBuffer = '';
+                }
+                continue;
+            }
+
+            if ($BlockComment) {
+                $BlockCommentBuffer .= $Char;
+                if ($Char === '*' && $Next === '/') {
+                    $BlockCommentBuffer .= $Next;
+                    $i++;
+                    $CommentsSinceLastStatement[] = trim($BlockCommentBuffer);
+                    $BlockComment = false;
+                    $BlockCommentBuffer = '';
+                }
+                continue;
+            }
+
+            if ($Quote) {
+                $Buffer .= $Char;
+                if ($Escape) {
+                    $Escape = false;
+                } elseif ($Char === '\\') {
+                    $Escape = true;
+                } elseif ($Char === $Quote) {
+                    $Quote = false;
+                }
+                continue;
+            }
+
+            if ($Char === '-' && $Next === '-') {
+                $Prev = ($i === 0) ? "\n" : $SQLText[$i - 1];
+                $After = ($i + 2 < $Length) ? $SQLText[$i + 2] : '';
+                if (($Prev === "\n" || trim($Prev) === '') && ($After === ' ' || $After === "\t" || $After === "\r")) {
+                    $LineComment = true;
+                    $LineCommentBuffer = '--';
+                    $i++;
+                    continue;
+                }
+            }
+            if ($Char === '#') {
+                $LineComment = true;
+                $LineCommentBuffer = '#';
+                continue;
+            }
+            if ($Char === '/' && $Next === '*') {
+                $BlockComment = true;
+                $BlockCommentBuffer = '/*';
+                $i++;
+                continue;
+            }
+            if ($Char === "'" || $Char === '"' || $Char === '`') {
+                $Quote = $Char;
+                $Buffer .= $Char;
+                continue;
+            }
+            if ($Char === ';') {
+                $SQL = trim($Buffer);
+                if ($SQL !== '') {
+                    $Statements[] = array('sql' => $SQL, 'line' => $StatementLine, 'comments' => $CommentsSinceLastStatement);
+                    $CommentsSinceLastStatement = array();
+                }
+                $Buffer = '';
+                $StatementLine = $Line;
+                continue;
+            }
+            if ($Buffer === '' && trim($Char) !== '') {
+                $StatementLine = $Line;
+            }
+            $Buffer .= $Char;
+        }
+        if ($LineCommentBuffer !== '') {
+            $CommentsSinceLastStatement[] = trim($LineCommentBuffer);
+        }
+        $SQL = trim($Buffer);
+        if ($SQL !== '') {
+            $Statements[] = array('sql' => $SQL, 'line' => $StatementLine, 'comments' => $CommentsSinceLastStatement);
+        }
+        return $Statements;
+    }
+
+    private function timedSQLLog($LogFile, $Message) {
+        $Line = '[' . date(self::DATE_CMU_SECONDS) . '] ' . $Message . PHP_EOL;
+        file_put_contents($LogFile, $Line, FILE_APPEND);
+        $Color = 'data';
+        if (strpos($Message, 'FAIL') === 0 || strpos($Message, 'ABORT') === 0) {
+            $Color = 'bad';
+        } elseif (strpos($Message, 'OK') === 0 || strpos($Message, 'DONE status=SUCCESS') === 0) {
+            $Color = 'good';
+        } elseif (strpos($Message, 'SECTION') === 0 || strpos($Message, 'START') === 0) {
+            $Color = 'label';
+        }
+        $this->echoc($Line, $Color);
+    }
+
+    private function summarizeSQL($SQL) {
+        $SQL = preg_replace('/\s+/', ' ', trim($SQL));
+        if (strlen($SQL) > 220) {
+            return substr($SQL, 0, 217) . '...';
+        }
+        return $SQL;
+    }
+
+    private function cleanLogText($Text) {
+        return str_replace(array("\r", "\n", '"'), array(' ', ' ', "'"), $Text);
+    }
+
+    private function formatSeconds($Seconds) {
+        if ($Seconds < 60) {
+            return number_format($Seconds, 3) . 's';
+        }
+        $Minutes = floor($Seconds / 60);
+        $Remaining = $Seconds - ($Minutes * 60);
+        return $Minutes . 'm ' . number_format($Remaining, 3) . 's';
+    }
+
+    private function fetchInformationalResultRows($Result) {
+        try {
+            $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
+            if (count($Rows) > 10) {
+                return array_slice($Rows, 0, 10);
+            }
+            return $Rows;
+        } catch (Exception $e) {
+            return array();
+        }
+    }
+
+    private function writeTimedSQLMonitorFile($MonitorFile, $LogFile) {
+        $Mysql = "mysql -u" . escapeshellarg($this->SugarConfig['dbconfig']['db_user_name']) . " -p" . escapeshellarg($this->SugarConfig['dbconfig']['db_password']) . " -h" . escapeshellarg($this->SugarConfig['dbconfig']['db_host_name']) . " " . escapeshellarg($this->SugarConfig['dbconfig']['db_name']);
+        $Content = "#! /usr/bin/env bash\n";
+        $Content .= "echo 'Log:'\n";
+        $Content .= "echo '  tail -f {$LogFile}'\n";
+        $Content .= "echo\n";
+        $Content .= "echo 'Database process list:'\n";
+        $Content .= "echo '  watch -n 5 \"{$Mysql} -e \\\"show full processlist;\\\"\"'\n";
+        $Content .= "echo\n";
+        $Content .= "echo 'Process:'\n";
+        $Content .= "echo '  htop --filter sugarutils'\n";
+        file_put_contents($MonitorFile, $Content);
+        chmod($MonitorFile, 0755);
+    }
+
+    private function printTimedSQLMonitorHelp($LogFile, $MonitorFile) {
+        $this->echoc("\nMonitor with:\n", 'label');
+        $this->echoc("tail -f {$LogFile}\n", 'command');
+        $this->echoc("bash {$MonitorFile}\n", 'command');
+    }
     private function dbManageSpace() {
         $this->echoc("{$this->InstanceInfo['INSTANCE']}_database_analysis.md\n\n", 'data');
         $this->echoc("\n#### Entire Database\n", 'label');
@@ -1616,6 +1987,7 @@ WHERE parent_id IS NOT NULL
         $dsn = "mysql:host={$this->SugarConfig['dbconfig']['db_host_name']};dbname={$this->SugarConfig['dbconfig']['db_name']}{$db_port}";
         try {
             $this->PDO = new PDO($dsn, $this->SugarConfig['dbconfig']['db_user_name'], $this->SugarConfig['dbconfig']['db_password']);
+            $this->PDO->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             $stmt = $this->PDO->query('SELECT @@version');
             $row = $stmt->fetch();
         } catch (PDOException $e) {
