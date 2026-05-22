@@ -1205,8 +1205,8 @@ WHERE parent_id IS NOT NULL
     }
 
     public function runHealthCheck() {
-        $Answer = $this->ask("Please enter the version of the Health Check you would like to run.\n12.0.4, 13.0.0, 13.0.2, 13.0.3, 13.1.0, 13.2.0, 13.3.0, 14.0.0, 14.1.0, 14.2.0, 25.1.0, 25.2.0 (default 25.2.0)");
-        $HealthCheckVersion = $Answer ? $Answer:'25.2.0';
+        $Answer = $this->ask("Please enter the version of the Health Check you would like to run.\n12.0.4, 13.0.0, 13.0.2, 13.0.3, 13.1.0, 13.2.0, 13.3.0, 14.0.0, 14.1.0, 14.2.0, 25.1.0, 25.2.0, 26.1.0 (default 26.1.0)");
+        $HealthCheckVersion = $Answer ? $Answer:'26.1.0';
         $this->echoc("{$HealthCheckVersion} ", 'data');
         $this->echoc("it is then.\n", 'label');
         $RunQuickRepairandRebuild = $this->ask("Would you like to run a Quick Repair and Rebuild first? Y/n");
