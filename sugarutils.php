@@ -221,6 +221,7 @@ class sugarutils {
             'gm' => array('label' => 'Generate Message', 'method' => 'generateMessage', 'section' => 'Message / Workflow Helpers'),
             'flf' => array('label' => 'Find Large Files', 'method' => 'findLargeFiles', 'section' => 'File / Package Helpers'),
             'ps' => array('label' => 'Package Scan', 'method' => 'packageScan', 'section' => 'File / Package Helpers'),
+            'adt' => array('label' => 'Archive Document Templates', 'method' => 'archiveDocumentTemplates', 'section' => 'File / Package Helpers'),
 
             'cfi95922' => array('label' => '[SugarBPM] Relationship Change Start Event issue 95922', 'method' => 'checkForIssue95922', 'section' => 'Special Issues'),
             'cfi95830' => array('label' => 'Issue 95830: Opportunity/RLI navigation breakage', 'method' => 'checkForIssue95830', 'section' => 'Special Issues'),
@@ -806,6 +807,75 @@ WHERE parent_id IS NOT NULL
         $Cmd = "package-scan -i {$this->InstanceInfo['INSTANCE']}";
         $this->echoc($Cmd . PHP_EOL, 'command');
         system($Cmd);
+        $this->ShowMenu = false;
+    }
+    
+    private function archiveDocumentTemplates() {
+        $this->echoc("Archiving Document Templates . . .\n", 'label');
+        $SQL = "SELECT id FROM document_templates WHERE deleted = 0;";
+        $this->echoc($SQL . PHP_EOL, 'command');
+        
+        $Rows = $this->PDO->query($SQL)->fetchAll(PDO::FETCH_ASSOC);
+        if (!$Rows) {
+            $this->echoc("No active document templates found.\n", 'yellow');
+            $this->ShowMenu = false;
+            return;
+        }
+        
+        $Files = array();
+        $Missing = array();
+        foreach ($Rows as $Row) {
+            $ID = trim((string) ($Row['id'] ?? ''));
+            if ($ID === '') {
+                continue;
+            }
+            
+            $UploadFolder = substr($ID, 5, 3);
+            $Path = "upload/{$UploadFolder}/{$ID}";
+            if (is_file($Path)) {
+                $Files[] = $Path;
+            } else {
+                $Missing[] = $Path;
+            }
+        }
+        
+        if (!$Files) {
+            $this->echoc("No matching upload files were found for active document templates.\n", 'red');
+            if ($Missing) {
+                $this->echoc("Missing files:\n", 'label');
+                foreach ($Missing as $Path) {
+                    $this->echoc("  {$Path}\n", 'data');
+                }
+            }
+            $this->ShowMenu = false;
+            return;
+        }
+        
+        $Archive = "document_templates_" . date('Y-m-d_H-i-s') . ".tar.gz";
+        $ListFile = tempnam(sys_get_temp_dir(), 'sugarutils_document_templates_');
+        if ($ListFile === false) {
+            $this->echoc("Unable to create temporary file list.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+        
+        file_put_contents($ListFile, implode(PHP_EOL, $Files) . PHP_EOL);
+        $Command = "tar -czf " . escapeshellarg($Archive) . " -T " . escapeshellarg($ListFile);
+        $this->echoc($Command . PHP_EOL, 'command');
+        system($Command, $ExitCode);
+        unlink($ListFile);
+        
+        if ($ExitCode !== 0) {
+            $this->echoc("Archive command failed with exit code {$ExitCode}.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+        
+        $this->echoc("Archived " . count($Files) . " document template files to {$Archive}\n", 'green');
+        if ($Missing) {
+            $this->echoc(count($Missing) . " document template upload files were missing.\n", 'yellow');
+        }
+        $this->echoc("This archive unpacks back into upload/???/<document_template_id>.\n", 'data');
         $this->ShowMenu = false;
     }
     
@@ -2347,4 +2417,3 @@ class Utils {
 
 $sugarutils = new sugarutils();
 $sugarutils->run();
-
