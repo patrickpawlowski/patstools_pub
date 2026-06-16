@@ -220,6 +220,7 @@ class sugarutils {
             'sd' => array('label' => 'Start Discovery', 'method' => 'startDiscovery', 'section' => 'Message / Workflow Helpers'),
             'gm' => array('label' => 'Generate Message', 'method' => 'generateMessage', 'section' => 'Message / Workflow Helpers'),
             'flf' => array('label' => 'Find Large Files', 'method' => 'findLargeFiles', 'section' => 'File / Package Helpers'),
+            'cu' => array('label' => 'Check Uploads', 'method' => 'checkUploads', 'section' => 'File / Package Helpers'),
             'ps' => array('label' => 'Package Scan', 'method' => 'packageScan', 'section' => 'File / Package Helpers'),
             'adt' => array('label' => 'Archive Document Templates', 'method' => 'archiveDocumentTemplates', 'section' => 'File / Package Helpers'),
 
@@ -807,6 +808,23 @@ WHERE parent_id IS NOT NULL
         $Cmd = "package-scan -i {$this->InstanceInfo['INSTANCE']}";
         $this->echoc($Cmd . PHP_EOL, 'command');
         system($Cmd);
+        $this->ShowMenu = false;
+    }
+
+    private function checkUploads() {
+        $Commands = array(
+            'ls upload/ | head',
+            'ls upload/ | tail',
+            'find upload/ -type f | wc -l',
+            'du upload/ -sh',
+        );
+
+        foreach ($Commands as $Command) {
+            $this->echoc($Command . PHP_EOL, 'command');
+            system($Command);
+            echo PHP_EOL;
+        }
+
         $this->ShowMenu = false;
     }
     
