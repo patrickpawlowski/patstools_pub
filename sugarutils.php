@@ -1263,7 +1263,7 @@ WHERE parent_id IS NOT NULL
         }
 
         echo "\n";
-        $SQL2 = "SELECT count(*) `Count`, license_type FROM users WHERE NOT deleted AND status = 'Active' group by license_type order by 1 desc;";
+        $SQL2 = "SELECT count(*) `Count`, is_admin, license_type FROM users WHERE NOT deleted AND status = 'Active' group by license_type order by 1 desc;";
         $this->echoc($SQL2 . PHP_EOL, 'magenta');
         $this->echoc(str_pad("Count  ", 10, ' ', STR_PAD_LEFT), 'label');
         $this->echoc(str_pad("License Type", 50).PHP_EOL, 'label');
