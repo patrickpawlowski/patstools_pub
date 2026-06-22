@@ -1277,9 +1277,13 @@ WHERE parent_id IS NOT NULL
         $this->echoc($SQL3 . PHP_EOL, 'magenta');
         foreach ($this->PDO->query($SQL3) as $Row) {
             $UserCount = $Row['Count'];
-            $this->echoc("Total active users: ", 'label');
+//            $this->echoc("Total active users: ", 'label');
+            $this->echoc(str_pad("Total active users", 20), 'label');
+            $this->echoc(" = ", 'red');
             $this->echoc("{$UserCount}\n", 'data');
-            $this->echoc("Total admin users: ", 'label');
+//            $this->echoc("Total admin users: ", 'label');
+            $this->echoc(str_pad("Total admin users", 20), 'label');
+            $this->echoc(" = ", 'red');
             $this->echoc("{$Row['Admins']}\n", 'data');
             $this->echoc(str_pad("License Count", 20), 'label');
             $this->echoc(" = ", 'red');
