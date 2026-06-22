@@ -1273,12 +1273,17 @@ WHERE parent_id IS NOT NULL
         }
 
         echo "\n";
-        $SQL3 = "SELECT count(*) `Count` FROM users WHERE NOT deleted AND status = 'Active';";
+        $SQL3 = "SELECT count(*) `Count`, sum(`is_admin`) AS Admins  FROM users WHERE NOT deleted AND status = 'Active';";
         $this->echoc($SQL3 . PHP_EOL, 'magenta');
         foreach ($this->PDO->query($SQL3) as $Row) {
             $UserCount = $Row['Count'];
             $this->echoc("Total active users: ", 'label');
             $this->echoc("{$UserCount}\n", 'data');
+            $this->echoc("Total admin users: ", 'label');
+            $this->echoc("{$Row['Admins']}\n", 'data');
+            $this->echoc(str_pad("License Count", 20), 'label');
+            $this->echoc(" = ", 'red');
+            $this->echoc("{$this->Subscription['quantity_c']}\n", 'data');
         }
         system('date');
         $this->ShowMenu = false;
