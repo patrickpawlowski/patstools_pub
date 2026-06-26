@@ -1283,8 +1283,8 @@ WHERE parent_id IS NOT NULL
         ];
         $this->saveBftSession($Session);
         $this->echoc("Started BFT session {$Session['id']} with {$Session['candidateCount']} candidate files.\n", 'green');
-        $this->echoc("Start by disabling one next-level choice under custom. Press l to list choices, or press d and enter a choice number.\n", 'label');
-        $this->echoc("Do not disable all of custom at once unless you intentionally want a very broad first test.\n", 'yellow');
+        $this->echoc("Start by disabling all custom candidate files as a broad relevance test. If that does not change the issue, BFT can stop.\n", 'label');
+        $this->echoc("After that first test succeeds, BFT will narrow the issue by next-level folders/files.\n", 'yellow');
         return $Session;
     }
 
@@ -1326,8 +1326,12 @@ WHERE parent_id IS NOT NULL
         $this->echoc(($Session['currentPath'] ?? 'custom') . PHP_EOL, 'data');
         $this->echoc("Meaning: ", 'label');
         $this->echoc("✅ disabled group is suspicious | 🛑 disabled group is cleared/not it | ⚠️ too broad/untestable\n", 'data');
+        if (!empty($Session['stopReason'])) {
+            $this->echoc("Stop reason: ", 'label');
+            $this->echoc((string) $Session['stopReason'] . PHP_EOL, 'yellow');
+        }
         $this->echoc("Next step: ", 'label');
-        $this->echoc("press l to list next-level choices, d to disable one listed choice, or type a choice number directly.\n", 'data');
+        $this->echoc("type a choice number to disable one listed choice, or use d to enter the number by prompt.\n", 'data');
 
         if (is_array($Session['activeTest'] ?? null)) {
             $this->echoc("Active disabled test: ", 'label');
@@ -1370,9 +1374,23 @@ WHERE parent_id IS NOT NULL
         return $Files;
     }
 
+    private function isBftInitialRelevanceGate(array $Session): bool {
+        return (int) ($Session['step'] ?? 0) === 0
+                && empty($Session['history'])
+                && rtrim((string) ($Session['currentPath'] ?? 'custom'), '/') === 'custom';
+    }
+
     private function getBftChoices(array $Session): array {
         $CurrentPath = rtrim((string) ($Session['currentPath'] ?? 'custom'), '/');
         $Candidates = $this->getBftCandidateFiles($CurrentPath);
+        if ($this->isBftInitialRelevanceGate($Session) && $Candidates) {
+            return [[
+                'path' => 'custom',
+                'type' => 'baseline',
+                'count' => count($Candidates),
+                'label' => 'ALL custom candidate files - first relevance test',
+            ]];
+        }
         $ChoicesByPath = [];
 
         foreach ($Candidates as $File) {
@@ -1406,6 +1424,11 @@ WHERE parent_id IS NOT NULL
     }
 
     private function displayBftChoices(array $Session): array {
+        if (!empty($Session['stopReason'])) {
+            $this->echoc("BFT stop reason: " . (string) $Session['stopReason'] . PHP_EOL, 'yellow');
+            $this->echoc("Restore all archives if needed, then quit BFT.\n", 'label');
+            return [];
+        }
         $this->echoc("Scanning files under {$Session['currentPath']} . . .\n", 'label');
         $Choices = $this->getBftChoices($Session);
         if (!$Choices) {
@@ -1416,9 +1439,9 @@ WHERE parent_id IS NOT NULL
         $this->echoc("\nNext-level choices under {$Session['currentPath']}:\n", 'label');
         foreach ($Choices as $Index => $Choice) {
             $this->echoc(str_pad((string) ($Index + 1), 4), 'data');
-            $this->echoc(str_pad($Choice['type'], 8), $Choice['type'] === 'folder' ? 'label' : 'yellow');
+            $this->echoc(str_pad($Choice['type'], 10), in_array($Choice['type'], ['folder', 'baseline'], true) ? 'label' : 'yellow');
             $this->echoc(str_pad((string) $Choice['count'], 6, ' ', STR_PAD_LEFT) . ' files  ', 'data');
-            $this->echoc($Choice['path'] . PHP_EOL, 'data');
+            $this->echoc(($Choice['label'] ?? $Choice['path']) . PHP_EOL, 'data');
         }
         $this->echoc("Type a number directly, or use d and enter the number when prompted. This disables only that choice's candidate files.\n", 'label');
         return $Choices;
@@ -1515,13 +1538,18 @@ WHERE parent_id IS NOT NULL
         }
 
         $Active = $Session['activeTest'];
+        $IsInitialRelevanceTest = ((int) ($Active['step'] ?? 0) === 1 && (string) ($Active['path'] ?? '') === 'custom');
         $Symbol = '🛑';
-        $Note = 'still broken; restored and moving to next sibling';
+        $Note = $IsInitialRelevanceTest
+                ? 'still broken after disabling all custom candidates; BFT candidate files are unlikely to be the cause'
+                : 'still broken; restored and moving to next sibling';
         $Descend = false;
 
         if ($Result === 'issue_disappeared') {
             $Symbol = '✅';
-            $Note = 'issue disappeared; restored and descended into suspicious path';
+            $Note = $IsInitialRelevanceTest
+                    ? 'issue disappeared after disabling all custom candidates; candidate files are relevant, restored and ready to narrow'
+                    : 'issue disappeared; restored and descended into suspicious path';
             $Descend = true;
         } elseif ($Result === 'untestable') {
             $Symbol = '⚠️';
@@ -1541,6 +1569,11 @@ WHERE parent_id IS NOT NULL
         ];
 
         $Session = $this->restoreBftActiveTest($Session, $Result, false);
+        if ($IsInitialRelevanceTest && $Result === 'still_broken') {
+            $Session['stopReason'] = 'Issue still exists after disabling all custom js/css/tpl/hbs/less candidates. BFT is probably not the right path for this issue.';
+        } else {
+            unset($Session['stopReason']);
+        }
         if ($Descend && is_dir($Active['path'] ?? '')) {
             $Session['currentPath'] = (string) $Active['path'];
         }
