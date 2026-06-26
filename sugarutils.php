@@ -1277,7 +1277,7 @@ WHERE parent_id IS NOT NULL
         $this->echoc($SQL3 . PHP_EOL, 'magenta');
         foreach ($this->PDO->query($SQL3) as $Row) {
             $UserCount = $Row['Count'];
-//            $this->echoc("Total active users: ", 'label');
+            $this->echoc("Total active users: ", 'label');
             $this->echoc(str_pad("Total active users", 20), 'label');
             $this->echoc(" = ", 'red');
             $this->echoc("{$UserCount}\n", 'data');
