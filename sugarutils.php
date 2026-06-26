@@ -207,6 +207,7 @@ class sugarutils {
             'suh' => array('label' => 'Show Upgrade History', 'method' => 'showUpgradeHistory', 'section' => 'Maintenance / Repairs'),
             'ci' => array('label' => 'Check Imports', 'method' => 'checkImports', 'section' => 'Maintenance / Repairs'),
             'wt' => array('label' => "What's this", 'method' => 'whatsThis', 'section' => 'Maintenance / Repairs'),
+            'bft' => array('label' => 'Brute Force Troubleshooting', 'method' => 'runBruteForceTroubleshooting', 'section' => 'Troubleshooting', 'dangerous' => true),
 
             'bcmf' => array('label' => 'Backup Custom and Modules Folders', 'method' => 'backupCustomAndModulesFolders', 'section' => 'Destructive / Changes Data or Files'),
             'dnu' => array('label' => 'Deactivate Non-admin Users', 'method' => 'deactivateNonAdminUsers', 'section' => 'Destructive / Changes Data or Files', 'dangerous' => true),
@@ -1164,6 +1165,482 @@ WHERE parent_id IS NOT NULL
         $this->echoc(str_pad($Row['date_entered'], 21), 'data');
         $this->echoc(str_pad($Row['date_modified'], 21), 'data');
         $this->echoc("\n", 'data');
+    }
+
+    private function runBruteForceTroubleshooting() {
+        if (!$this->isCaseCloneInstance()) {
+            $this->echoc("\nBFT is intentionally limited to case clones.\n", 'red');
+            $this->echoc("Detected instance/group: ", 'label');
+            $this->echoc($this->getInstanceCloneGuardText() . PHP_EOL, 'data');
+            $this->echoc("If this really is a case clone, verify instance-info output contains a case clone name like case582861a or ai_case582861a.\n", 'yellow');
+            $this->ShowMenu = false;
+            return;
+        }
+
+        $Session = $this->loadBftSession();
+        if (!$Session) {
+            $Session = $this->startBftSession();
+        }
+
+        while (true) {
+            $this->displayBftStatus($Session);
+            $Command = strtolower(trim($this->ask("BFT command: [l]ist choices, [d]isable choice, [y] still broken, [n] issue disappeared, [u] untestable, [r]estore active, [a] restore all, [h]istory, [q]uit BFT")));
+
+            switch ($Command) {
+                case '':
+                case 'l':
+                    $this->displayBftChoices($Session);
+                    break;
+
+                case 'd':
+                    $Session = $this->disableBftChoice($Session);
+                    break;
+
+                case 'y':
+                    $Session = $this->recordBftResult($Session, 'still_broken');
+                    break;
+
+                case 'n':
+                    $Session = $this->recordBftResult($Session, 'issue_disappeared');
+                    break;
+
+                case 'u':
+                    $Session = $this->recordBftResult($Session, 'untestable');
+                    break;
+
+                case 'r':
+                    $Session = $this->restoreBftActiveTest($Session, 'manual_restore');
+                    break;
+
+                case 'a':
+                    if ($this->askYes("Restore all BFT archives? This returns the custom candidate files to the last archived state.")) {
+                        $Session = $this->restoreAllBftArchives($Session);
+                    }
+                    break;
+
+                case 'h':
+                    $this->displayBftHistory($Session);
+                    break;
+
+                case 'q':
+                case 'quit':
+                case 'exit':
+                    $this->ShowMenu = false;
+                    return;
+
+                default:
+                    if (ctype_digit($Command)) {
+                        $Session = $this->disableBftChoice($Session, (int) $Command);
+                    } else {
+                        $this->echoc("Unknown BFT command '{$Command}'.\n", 'red');
+                    }
+                    break;
+            }
+        }
+    }
+
+    private function isCaseCloneInstance(): bool {
+        return (bool) preg_match('/(^|[_-])case\d+/i', $this->getInstanceCloneGuardText());
+    }
+
+    private function getInstanceCloneGuardText(): string {
+        return trim(implode(' ', array_filter([
+            $this->InstanceInfo['INSTANCE'] ?? '',
+            $this->InstanceInfo['GROUP'] ?? '',
+            getcwd(),
+        ])));
+    }
+
+    private function startBftSession(): array {
+        if (!is_dir('.bft')) {
+            mkdir('.bft', 0775, true);
+        }
+        if (!is_dir('.bft/disabled')) {
+            mkdir('.bft/disabled', 0775, true);
+        }
+
+        $Candidates = $this->getBftCandidateFiles('custom');
+        file_put_contents('.bft/candidates.txt', implode(PHP_EOL, $Candidates) . PHP_EOL);
+
+        $Session = [
+            'id' => date('Ymd_His'),
+            'baseline' => 'issue_present',
+            'mode' => 'Disable candidate files until the issue disappears.',
+            'currentPath' => 'custom',
+            'candidateCount' => count($Candidates),
+            'activeTest' => null,
+            'step' => 0,
+            'history' => [],
+        ];
+        $this->saveBftSession($Session);
+        $this->echoc("Started BFT session {$Session['id']} with {$Session['candidateCount']} candidate files.\n", 'green');
+        return $Session;
+    }
+
+    private function loadBftSession(): ?array {
+        if (!file_exists('.bft/session.json')) {
+            return null;
+        }
+        $Session = json_decode(file_get_contents('.bft/session.json'), true);
+        return is_array($Session) ? $Session : null;
+    }
+
+    private function saveBftSession(array $Session): void {
+        if (!is_dir('.bft')) {
+            mkdir('.bft', 0775, true);
+        }
+        file_put_contents('.bft/session.json', json_encode($Session, JSON_PRETTY_PRINT) . PHP_EOL);
+        $Lines = [];
+        foreach (($Session['history'] ?? []) as $Item) {
+            $Lines[] = sprintf(
+                '%03d %s %s %s',
+                (int) ($Item['step'] ?? 0),
+                (string) ($Item['symbol'] ?? ''),
+                (string) ($Item['path'] ?? ''),
+                (string) ($Item['note'] ?? '')
+            );
+        }
+        file_put_contents('.bft/history.txt', implode(PHP_EOL, $Lines) . ($Lines ? PHP_EOL : ''));
+    }
+
+    private function displayBftStatus(array $Session): void {
+        $this->echoc("\n---<=== Brute Force Troubleshooting ===>---\n", 'brightblue');
+        $this->echoc("Session: ", 'label');
+        $this->echoc(($Session['id'] ?? '') . PHP_EOL, 'data');
+        $this->echoc("Baseline: ", 'label');
+        $this->echoc("issue present\n", 'data');
+        $this->echoc("Goal: ", 'label');
+        $this->echoc("disable candidate files until the issue disappears\n", 'data');
+        $this->echoc("Current path: ", 'label');
+        $this->echoc(($Session['currentPath'] ?? 'custom') . PHP_EOL, 'data');
+        $this->echoc("Meaning: ", 'label');
+        $this->echoc("✅ disabled group is suspicious | 🛑 disabled group is cleared/not it | ⚠️ too broad/untestable\n", 'data');
+
+        if (is_array($Session['activeTest'] ?? null)) {
+            $this->echoc("Active disabled test: ", 'label');
+            $this->echoc(($Session['activeTest']['path'] ?? '') . PHP_EOL, 'red');
+            $this->echoc("Archive: ", 'label');
+            $this->echoc(($Session['activeTest']['archive'] ?? '') . PHP_EOL, 'data');
+        } else {
+            $this->echoc("Active disabled test: ", 'label');
+            $this->echoc("none\n", 'data');
+        }
+    }
+
+    private function getBftCandidateFiles(string $Path): array {
+        $Root = rtrim($Path, '/');
+        if (!is_dir($Root) && !is_file($Root)) {
+            return [];
+        }
+
+        $Extensions = ['js', 'css', 'tpl', 'hbs', 'less'];
+        $Files = [];
+        if (is_file($Root)) {
+            $Ext = strtolower(pathinfo($Root, PATHINFO_EXTENSION));
+            return in_array($Ext, $Extensions, true) ? [$Root] : [];
+        }
+
+        $Iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($Root, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($Iterator as $FileInfo) {
+            if (!$FileInfo->isFile()) {
+                continue;
+            }
+            $PathName = str_replace('\\', '/', $FileInfo->getPathname());
+            $Ext = strtolower(pathinfo($PathName, PATHINFO_EXTENSION));
+            if (in_array($Ext, $Extensions, true)) {
+                $Files[] = ltrim($PathName, './');
+            }
+        }
+        sort($Files, SORT_NATURAL | SORT_FLAG_CASE);
+        return $Files;
+    }
+
+    private function getBftChoices(array $Session): array {
+        $CurrentPath = rtrim((string) ($Session['currentPath'] ?? 'custom'), '/');
+        $Candidates = $this->getBftCandidateFiles($CurrentPath);
+        $ChoicesByPath = [];
+
+        foreach ($Candidates as $File) {
+            $Relative = substr($File, strlen($CurrentPath));
+            $Relative = ltrim((string) $Relative, '/');
+            if ($Relative === '') {
+                continue;
+            }
+            $Parts = explode('/', $Relative);
+            $ChoicePath = count($Parts) === 1
+                    ? $File
+                    : $CurrentPath . '/' . $Parts[0];
+            if (!isset($ChoicesByPath[$ChoicePath])) {
+                $ChoicesByPath[$ChoicePath] = [
+                    'path' => $ChoicePath,
+                    'type' => is_dir($ChoicePath) ? 'folder' : 'file',
+                    'count' => 0,
+                ];
+            }
+            $ChoicesByPath[$ChoicePath]['count']++;
+        }
+
+        $Choices = array_values($ChoicesByPath);
+        usort($Choices, function ($A, $B) {
+            if ($A['type'] !== $B['type']) {
+                return $A['type'] === 'folder' ? -1 : 1;
+            }
+            return strnatcasecmp($A['path'], $B['path']);
+        });
+        return $Choices;
+    }
+
+    private function displayBftChoices(array $Session): array {
+        $Choices = $this->getBftChoices($Session);
+        if (!$Choices) {
+            $this->echoc("No candidate files remain under {$Session['currentPath']}.\n", 'yellow');
+            return [];
+        }
+
+        $this->echoc("\nNext-level choices under {$Session['currentPath']}:\n", 'label');
+        foreach ($Choices as $Index => $Choice) {
+            $this->echoc(str_pad((string) ($Index + 1), 4), 'data');
+            $this->echoc(str_pad($Choice['type'], 8), $Choice['type'] === 'folder' ? 'label' : 'yellow');
+            $this->echoc(str_pad((string) $Choice['count'], 6, ' ', STR_PAD_LEFT) . ' files  ', 'data');
+            $this->echoc($Choice['path'] . PHP_EOL, 'data');
+        }
+        $this->echoc("Type a number directly, or use d and enter the number when prompted.\n", 'label');
+        return $Choices;
+    }
+
+    private function disableBftChoice(array $Session, ?int $ChoiceNumber = null): array {
+        if (is_array($Session['activeTest'] ?? null)) {
+            $this->echoc("There is already an active disabled test. Record [y], [n], [u], or [r]estore it first.\n", 'red');
+            return $Session;
+        }
+
+        $Choices = $this->displayBftChoices($Session);
+        if (!$Choices) {
+            return $Session;
+        }
+
+        if ($ChoiceNumber === null) {
+            $ChoiceNumber = (int) $this->ask("Choice number to disable");
+        }
+        $Choice = $Choices[$ChoiceNumber - 1] ?? null;
+        if (!$Choice) {
+            $this->echoc("Invalid choice.\n", 'red');
+            return $Session;
+        }
+
+        $Files = $this->getBftCandidateFiles($Choice['path']);
+        if (!$Files) {
+            $this->echoc("No candidate files found for {$Choice['path']}.\n", 'yellow');
+            return $Session;
+        }
+
+        $Step = (int) ($Session['step'] ?? 0) + 1;
+        $Archive = sprintf(
+            '.bft/disabled/%03d_%s.zip',
+            $Step,
+            preg_replace('/[^A-Za-z0-9._-]+/', '_', $Choice['path'])
+        );
+
+        if (!$this->archiveAndRemoveBftFiles($Files, $Archive)) {
+            $this->echoc("Failed to disable {$Choice['path']}.\n", 'red');
+            return $Session;
+        }
+
+        $this->clearBftCache();
+        $Session['step'] = $Step;
+        $Session['activeTest'] = [
+            'step' => $Step,
+            'path' => $Choice['path'],
+            'archive' => $Archive,
+            'fileCount' => count($Files),
+        ];
+        $this->saveBftSession($Session);
+
+        $this->echoc("Disabled {$Choice['path']} ({$Session['activeTest']['fileCount']} files).\n", 'green');
+        $this->echoc("Now test in the browser, then return here with y/n/u.\n", 'label');
+        return $Session;
+    }
+
+    private function archiveAndRemoveBftFiles(array $Files, string $Archive): bool {
+        if (class_exists('ZipArchive')) {
+            $Zip = new ZipArchive();
+            if ($Zip->open($Archive, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                return false;
+            }
+            foreach ($Files as $File) {
+                if (is_file($File)) {
+                    $Zip->addFile($File, $File);
+                }
+            }
+            $Zip->close();
+
+            foreach ($Files as $File) {
+                if (is_file($File)) {
+                    unlink($File);
+                }
+            }
+            return true;
+        }
+
+        $ListFile = '.bft/ziplist_' . date('Ymd_His') . '_' . mt_rand(1000, 9999) . '.txt';
+        file_put_contents($ListFile, implode(PHP_EOL, array_filter($Files, 'is_file')) . PHP_EOL);
+        $Command = 'zip -q -m ' . escapeshellarg($Archive) . ' -@ < ' . escapeshellarg($ListFile);
+        $this->echoc($Command . PHP_EOL, 'command');
+        system($Command, $ExitCode);
+        unlink($ListFile);
+        return $ExitCode === 0 && file_exists($Archive);
+    }
+
+    private function recordBftResult(array $Session, string $Result): array {
+        if (!is_array($Session['activeTest'] ?? null)) {
+            $this->echoc("No active BFT test to record.\n", 'yellow');
+            return $Session;
+        }
+
+        $Active = $Session['activeTest'];
+        $Symbol = '🛑';
+        $Note = 'still broken; restored and moving to next sibling';
+        $Descend = false;
+
+        if ($Result === 'issue_disappeared') {
+            $Symbol = '✅';
+            $Note = 'issue disappeared; restored and descended into suspicious path';
+            $Descend = true;
+        } elseif ($Result === 'untestable') {
+            $Symbol = '⚠️';
+            $Note = 'untestable; restored and descended smaller';
+            $Descend = true;
+        }
+
+        $Session['history'][] = [
+            'step' => (int) ($Active['step'] ?? 0),
+            'symbol' => $Symbol,
+            'path' => (string) ($Active['path'] ?? ''),
+            'result' => $Result,
+            'note' => $Note,
+            'archive' => (string) ($Active['archive'] ?? ''),
+            'fileCount' => (int) ($Active['fileCount'] ?? 0),
+            'recordedAt' => date('c'),
+        ];
+
+        $Session = $this->restoreBftActiveTest($Session, $Result, false);
+        if ($Descend && is_dir($Active['path'] ?? '')) {
+            $Session['currentPath'] = (string) $Active['path'];
+        }
+        $this->saveBftSession($Session);
+        return $Session;
+    }
+
+    private function restoreBftActiveTest(array $Session, string $Reason = 'restore', bool $WriteHistory = true): array {
+        if (!is_array($Session['activeTest'] ?? null)) {
+            $this->echoc("No active BFT test to restore.\n", 'yellow');
+            return $Session;
+        }
+
+        $Active = $Session['activeTest'];
+        $Archive = (string) ($Active['archive'] ?? '');
+        if ($Archive && file_exists($Archive)) {
+            $this->restoreBftArchive($Archive);
+            $this->clearBftCache();
+            $this->echoc("Restored {$Active['path']}.\n", 'green');
+        }
+
+        if ($WriteHistory) {
+            $Session['history'][] = [
+                'step' => (int) ($Active['step'] ?? 0),
+                'symbol' => '↩️',
+                'path' => (string) ($Active['path'] ?? ''),
+                'result' => $Reason,
+                'note' => 'manual restore',
+                'archive' => $Archive,
+                'fileCount' => (int) ($Active['fileCount'] ?? 0),
+                'recordedAt' => date('c'),
+            ];
+        }
+
+        $Session['activeTest'] = null;
+        $this->saveBftSession($Session);
+        return $Session;
+    }
+
+    private function restoreBftArchive(string $Archive): void {
+        if (class_exists('ZipArchive')) {
+            $Zip = new ZipArchive();
+            if ($Zip->open($Archive) === true) {
+                $Zip->extractTo('.');
+                $Zip->close();
+            }
+            return;
+        }
+
+        $Command = 'unzip -oq ' . escapeshellarg($Archive);
+        $this->echoc($Command . PHP_EOL, 'command');
+        system($Command);
+    }
+
+    private function restoreAllBftArchives(array $Session): array {
+        if (is_array($Session['activeTest'] ?? null)) {
+            $Session = $this->restoreBftActiveTest($Session, 'restore_all', false);
+        }
+
+        foreach (glob('.bft/disabled/*.zip') ?: [] as $Archive) {
+            $this->restoreBftArchive($Archive);
+        }
+        $this->clearBftCache();
+        $Session['activeTest'] = null;
+        $Session['history'][] = [
+            'step' => (int) ($Session['step'] ?? 0),
+            'symbol' => '↩️',
+            'path' => 'all',
+            'result' => 'restore_all',
+            'note' => 'restored all BFT archives',
+            'archive' => '.bft/disabled/*.zip',
+            'fileCount' => 0,
+            'recordedAt' => date('c'),
+        ];
+        $this->saveBftSession($Session);
+        $this->echoc("All BFT archives restored.\n", 'green');
+        return $Session;
+    }
+
+    private function clearBftCache(): void {
+        $this->echoc("Clearing cache/*\n", 'command');
+        foreach (glob('cache/*') ?: [] as $Path) {
+            $this->removePath($Path);
+        }
+    }
+
+    private function removePath(string $Path): void {
+        if (is_dir($Path) && !is_link($Path)) {
+            foreach (scandir($Path) ?: [] as $Child) {
+                if ($Child === '.' || $Child === '..') {
+                    continue;
+                }
+                $this->removePath($Path . DIRECTORY_SEPARATOR . $Child);
+            }
+            rmdir($Path);
+            return;
+        }
+        if (file_exists($Path) || is_link($Path)) {
+            unlink($Path);
+        }
+    }
+
+    private function displayBftHistory(array $Session): void {
+        $History = $Session['history'] ?? [];
+        if (!$History) {
+            $this->echoc("No BFT history yet.\n", 'yellow');
+            return;
+        }
+        $this->echoc("\nBFT History\n", 'label');
+        foreach ($History as $Item) {
+            $this->echoc(str_pad((string) ($Item['step'] ?? ''), 4), 'data');
+            $this->echoc(str_pad((string) ($Item['symbol'] ?? ''), 5), 'label');
+            $this->echoc((string) ($Item['path'] ?? ''), 'data');
+            $this->echoc(' - ' . (string) ($Item['note'] ?? '') . PHP_EOL, 'label');
+        }
     }
 
     private function searchDropdownLists($Command) {
