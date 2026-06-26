@@ -1259,6 +1259,7 @@ WHERE parent_id IS NOT NULL
             mkdir('.bft/disabled', 0775, true);
         }
 
+        $this->echoc("Scanning custom for candidate files. This can take a bit on large instances . . .\n", 'label');
         $Candidates = $this->getBftCandidateFiles('custom');
         file_put_contents('.bft/candidates.txt', implode(PHP_EOL, $Candidates) . PHP_EOL);
 
@@ -1274,6 +1275,8 @@ WHERE parent_id IS NOT NULL
         ];
         $this->saveBftSession($Session);
         $this->echoc("Started BFT session {$Session['id']} with {$Session['candidateCount']} candidate files.\n", 'green');
+        $this->echoc("Start by disabling one next-level choice under custom. Press l to list choices, or press d and enter a choice number.\n", 'label');
+        $this->echoc("Do not disable all of custom at once unless you intentionally want a very broad first test.\n", 'yellow');
         return $Session;
     }
 
@@ -1315,6 +1318,8 @@ WHERE parent_id IS NOT NULL
         $this->echoc(($Session['currentPath'] ?? 'custom') . PHP_EOL, 'data');
         $this->echoc("Meaning: ", 'label');
         $this->echoc("✅ disabled group is suspicious | 🛑 disabled group is cleared/not it | ⚠️ too broad/untestable\n", 'data');
+        $this->echoc("Next step: ", 'label');
+        $this->echoc("press l to list next-level choices, d to disable one listed choice, or type a choice number directly.\n", 'data');
 
         if (is_array($Session['activeTest'] ?? null)) {
             $this->echoc("Active disabled test: ", 'label');
@@ -1393,6 +1398,7 @@ WHERE parent_id IS NOT NULL
     }
 
     private function displayBftChoices(array $Session): array {
+        $this->echoc("Scanning files under {$Session['currentPath']} . . .\n", 'label');
         $Choices = $this->getBftChoices($Session);
         if (!$Choices) {
             $this->echoc("No candidate files remain under {$Session['currentPath']}.\n", 'yellow');
@@ -1406,7 +1412,7 @@ WHERE parent_id IS NOT NULL
             $this->echoc(str_pad((string) $Choice['count'], 6, ' ', STR_PAD_LEFT) . ' files  ', 'data');
             $this->echoc($Choice['path'] . PHP_EOL, 'data');
         }
-        $this->echoc("Type a number directly, or use d and enter the number when prompted.\n", 'label');
+        $this->echoc("Type a number directly, or use d and enter the number when prompted. This disables only that choice's candidate files.\n", 'label');
         return $Choices;
     }
 
@@ -1422,7 +1428,7 @@ WHERE parent_id IS NOT NULL
         }
 
         if ($ChoiceNumber === null) {
-            $ChoiceNumber = (int) $this->ask("Choice number to disable");
+            $ChoiceNumber = (int) $this->ask("Choice number to disable. This will archive/remove only that listed choice");
         }
         $Choice = $Choices[$ChoiceNumber - 1] ?? null;
         if (!$Choice) {
@@ -1430,6 +1436,7 @@ WHERE parent_id IS NOT NULL
             return $Session;
         }
 
+        $this->echoc("Scanning files to disable under {$Choice['path']} . . .\n", 'label');
         $Files = $this->getBftCandidateFiles($Choice['path']);
         if (!$Files) {
             $this->echoc("No candidate files found for {$Choice['path']}.\n", 'yellow');
