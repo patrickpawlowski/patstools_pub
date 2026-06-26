@@ -1184,8 +1184,12 @@ WHERE parent_id IS NOT NULL
 
         while (true) {
             $this->displayBftStatus($Session);
+            $IsInitialGate = $this->isBftInitialRelevanceGate($Session) && !is_array($Session['activeTest'] ?? null);
             if (is_array($Session['activeTest'] ?? null)) {
-                $Prompt = "Test in the browser, then enter [n] issue disappeared, [y] still broken, [u] untestable, [r]estore, [h]istory, [q]uit BFT";
+                $Prompt = "Please test for the issue.\nIs the issue fixed?\n[y] Yes, the issue DISAPPEARED\n[n] No, the issue is STILL BROKEN\n[u] Untestable: the instance is broken or worse than before\nOther options: [h]istory, [q]uit and resume later, [r]estore everything and keep BFT open, [a] restore all and exit";
+            } elseif ($IsInitialGate) {
+                $this->displayBftInitialRelevanceGate($Session);
+                $Prompt = "Continue to archive/remove all custom js/css/tpl/hbs/less files for the first relevance test? [c]ontinue/[q]uit";
             } else {
                 $this->displayBftChoices($Session);
                 $Prompt = "Type a choice number to disable it, or [l]ist, [d]isable by prompt, [h]istory, [a] restore all, [q]uit BFT";
@@ -1194,22 +1198,38 @@ WHERE parent_id IS NOT NULL
 
             switch ($Command) {
                 case '':
+                    break;
+
+                case 'c':
+                case 'continue':
+                case 'yes':
+                    if ($IsInitialGate) {
+                        $Session = $this->disableBftChoice($Session, 1);
+                    } else {
+                        $this->echoc("Continue only applies to the initial relevance test. Type a choice number instead.\n", 'yellow');
+                    }
+                    break;
+
                 case 'l':
-                    if (!is_array($Session['activeTest'] ?? null)) {
+                    if (!$IsInitialGate && !is_array($Session['activeTest'] ?? null)) {
                         $this->displayBftChoices($Session);
                     }
                     break;
 
                 case 'd':
-                    $Session = $this->disableBftChoice($Session);
+                    if ($IsInitialGate) {
+                        $this->echoc("There is only one initial action here. Use c to continue or q to quit.\n", 'yellow');
+                    } else {
+                        $Session = $this->disableBftChoice($Session);
+                    }
                     break;
 
                 case 'y':
-                    $Session = $this->recordBftResult($Session, 'still_broken');
+                    $Session = $this->recordBftResult($Session, 'issue_disappeared');
                     break;
 
                 case 'n':
-                    $Session = $this->recordBftResult($Session, 'issue_disappeared');
+                    $Session = $this->recordBftResult($Session, 'still_broken');
                     break;
 
                 case 'u':
@@ -1221,8 +1241,10 @@ WHERE parent_id IS NOT NULL
                     break;
 
                 case 'a':
-                    if ($this->askYes("Restore all BFT archives? This returns the custom candidate files to the last archived state.")) {
+                    if ($this->askYes("Restore all BFT archives and exit BFT? This returns the custom candidate files to the last archived state.")) {
                         $Session = $this->restoreAllBftArchives($Session);
+                        $this->ShowMenu = false;
+                        return;
                     }
                     break;
 
@@ -1331,7 +1353,12 @@ WHERE parent_id IS NOT NULL
             $this->echoc((string) $Session['stopReason'] . PHP_EOL, 'yellow');
         }
         $this->echoc("Next step: ", 'label');
-        $this->echoc("type a choice number to disable one listed choice, or use d to enter the number by prompt.\n", 'data');
+        $this->echoc(
+                $this->isBftInitialRelevanceGate($Session)
+                        ? "continue to run the first relevance test, or quit.\n"
+                        : "type a choice number to disable one listed choice, or use d to enter the number by prompt.\n",
+                'data'
+        );
 
         if (is_array($Session['activeTest'] ?? null)) {
             $this->echoc("Active disabled test: ", 'label');
@@ -1421,6 +1448,22 @@ WHERE parent_id IS NOT NULL
             return strnatcasecmp($A['path'], $B['path']);
         });
         return $Choices;
+    }
+
+    private function displayBftInitialRelevanceGate(array $Session): void {
+        $this->echoc("Scanning files under custom . . .\n", 'label');
+        $Choices = $this->getBftChoices($Session);
+        $Choice = $Choices[0] ?? null;
+        if (!$Choice) {
+            $this->echoc("No custom js/css/tpl/hbs/less candidate files found. There is nothing for BFT to test.\n", 'yellow');
+            return;
+        }
+        $this->echoc("\nInitial relevance test:\n", 'label');
+        $this->echoc("  ", 'data');
+        $this->echoc((string) ($Choice['count'] ?? 0), 'data');
+        $this->echoc(" custom js/css/tpl/hbs/less files will be archived and removed.\n", 'data');
+        $this->echoc("  If the issue still exists after this, stop BFT and look elsewhere.\n", 'label');
+        $this->echoc("  If the issue disappears, BFT will restore the files and start narrowing by folder.\n", 'label');
     }
 
     private function displayBftChoices(array $Session): array {
