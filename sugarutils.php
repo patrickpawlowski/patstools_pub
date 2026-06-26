@@ -1450,6 +1450,16 @@ WHERE parent_id IS NOT NULL
         return $Choices;
     }
 
+    private function getBftChoiceSymbol(array $Session, string $Path): string {
+        $Symbol = '';
+        foreach (($Session['history'] ?? []) as $Item) {
+            if ((string) ($Item['path'] ?? '') === $Path) {
+                $Symbol = (string) ($Item['symbol'] ?? '');
+            }
+        }
+        return $Symbol;
+    }
+
     private function displayBftInitialRelevanceGate(array $Session): void {
         $this->echoc("Scanning files under custom . . .\n", 'label');
         $Choices = $this->getBftChoices($Session);
@@ -1481,7 +1491,9 @@ WHERE parent_id IS NOT NULL
 
         $this->echoc("\nNext-level choices under {$Session['currentPath']}:\n", 'label');
         foreach ($Choices as $Index => $Choice) {
+            $Symbol = $this->getBftChoiceSymbol($Session, (string) ($Choice['path'] ?? ''));
             $this->echoc(str_pad((string) ($Index + 1), 4), 'data');
+            $this->echoc(str_pad($Symbol !== '' ? $Symbol : ' ', 4), $Symbol === '✅' ? 'green' : ($Symbol === '🛑' ? 'red' : ($Symbol === '⚠️' ? 'yellow' : 'data')));
             $this->echoc(str_pad($Choice['type'], 10), in_array($Choice['type'], ['folder', 'baseline'], true) ? 'label' : 'yellow');
             $this->echoc(str_pad((string) $Choice['count'], 6, ' ', STR_PAD_LEFT) . ' files  ', 'data');
             $this->echoc(($Choice['label'] ?? $Choice['path']) . PHP_EOL, 'data');
