@@ -1184,12 +1184,20 @@ WHERE parent_id IS NOT NULL
 
         while (true) {
             $this->displayBftStatus($Session);
-            $Command = strtolower(trim($this->ask("BFT command: [l]ist choices, [d]isable choice, [y] still broken, [n] issue disappeared, [u] untestable, [r]estore active, [a] restore all, [h]istory, [q]uit BFT")));
+            if (is_array($Session['activeTest'] ?? null)) {
+                $Prompt = "Test in the browser, then enter [n] issue disappeared, [y] still broken, [u] untestable, [r]estore, [h]istory, [q]uit BFT";
+            } else {
+                $this->displayBftChoices($Session);
+                $Prompt = "Type a choice number to disable it, or [l]ist, [d]isable by prompt, [h]istory, [a] restore all, [q]uit BFT";
+            }
+            $Command = strtolower(trim($this->ask($Prompt)));
 
             switch ($Command) {
                 case '':
                 case 'l':
-                    $this->displayBftChoices($Session);
+                    if (!is_array($Session['activeTest'] ?? null)) {
+                        $this->displayBftChoices($Session);
+                    }
                     break;
 
                 case 'd':
