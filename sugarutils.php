@@ -197,6 +197,7 @@ class sugarutils {
             'spl' => array('label' => 'Show Process List', 'method' => 'showProcessList', 'section' => 'Database / Instance Info'),
             'ws' => array('label' => 'Watch SQL', 'method' => 'watchSQL', 'section' => 'Database / Instance Info'),
             'dbms' => array('label' => 'Database Manage Space', 'method' => 'dbManageSpace', 'section' => 'Database / Instance Info'),
+            'dus' => array('label' => 'Create Data Usage Snapshot JSON', 'method' => 'createDataUsageSnapshot', 'section' => 'Database / Instance Info'),
             'cc' => array('label' => 'Check Collation', 'method' => 'checkCollation', 'section' => 'Database / Instance Info'),
 
             'scu' => array('label' => 'Sugar Checkup', 'method' => 'runSugarCheckup', 'section' => 'Maintenance / Repairs'),
@@ -495,6 +496,188 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         
         
         utils::pressEnterToContinue();
+    }
+
+    private function createDataUsageSnapshot($Command = '') {
+        if (!$this->PDO) {
+            $this->echoc("Database connection is not available; cannot create data usage snapshot.\n", 'bad');
+            utils::pressEnterToContinue();
+            return;
+        }
+
+        $Parts = preg_split('/\s+/', trim($Command));
+        $UploadPath = isset($Parts[1]) && $Parts[1] !== '' ? $Parts[1] : 'upload';
+        $GeneratedAt = gmdate('Y-m-d\TH:i:s\Z');
+        $LicenseConfig = $this->getLicenseConfigRows();
+        $Subscription = $this->parseLicenseSubscription($LicenseConfig);
+        $LicenseKey = isset($LicenseConfig['key']) ? $LicenseConfig['key'] : 'unknown_license';
+        $InstanceName = isset($this->InstanceInfo['INSTANCE']) ? $this->InstanceInfo['INSTANCE'] : gethostname();
+        $Snapshot = array(
+            'snapshot_version' => 1,
+            'generated_at_utc' => $GeneratedAt,
+            'instance' => array(
+                'info' => $this->InstanceInfo,
+                'sugar_config' => array(
+                    'db_name' => isset($this->SugarConfig['dbconfig']['db_name']) ? $this->SugarConfig['dbconfig']['db_name'] : null,
+                    'site_url' => isset($this->SugarConfig['site_url']) ? $this->SugarConfig['site_url'] : null,
+                    'unique_key' => isset($this->SugarConfig['unique_key']) ? $this->SugarConfig['unique_key'] : null,
+                ),
+            ),
+            'license' => array(
+                'key' => $LicenseKey,
+                'users' => isset($LicenseConfig['users']) ? (int) $LicenseConfig['users'] : null,
+                'expire_date' => isset($LicenseConfig['expire_date']) ? $LicenseConfig['expire_date'] : null,
+                'subscription_checked_at' => isset($LicenseConfig['subscription_checked_at']) ? $LicenseConfig['subscription_checked_at'] : null,
+                'last_validation_success' => isset($LicenseConfig['last_validation_success']) ? $LicenseConfig['last_validation_success'] : null,
+                'last_validation' => isset($LicenseConfig['last_validation']) ? $LicenseConfig['last_validation'] : null,
+                'config' => $this->redactLicenseConfigForSnapshot($LicenseConfig),
+                'subscription' => $Subscription,
+            ),
+            'database' => $this->collectDatabaseUsage(),
+            'files' => $this->collectFileUsage($UploadPath),
+        );
+
+        $OutputDir = $this->getDataUsageOutputDir();
+        $Filename = $this->sanitizeFilename($InstanceName) . '_' . $this->sanitizeFilename($LicenseKey) . '_' . gmdate('Ymd\THis\Z') . '_data_usage.json';
+        $OutputPath = $OutputDir . '/' . $Filename;
+        $JSON = json_encode($Snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($JSON === false) {
+            $this->echoc("Failed to encode snapshot JSON: " . json_last_error_msg() . "\n", 'bad');
+            utils::pressEnterToContinue();
+            return;
+        }
+
+        file_put_contents($OutputPath, $JSON . PHP_EOL);
+        $this->echoc("Data usage snapshot created:\n", 'label');
+        $this->echoc($OutputPath . "\n", 'good');
+        $this->echoc("Upload path scanned: {$UploadPath}\n", 'data');
+        utils::pressEnterToContinue();
+    }
+
+    private function getLicenseConfigRows(): array {
+        $Rows = array();
+        $SQL = "SELECT name, value FROM config WHERE category = 'license' ORDER BY name";
+        foreach ($this->PDO->query($SQL) as $Row) {
+            $Rows[$Row['name']] = $Row['value'];
+        }
+        return $Rows;
+    }
+
+    private function redactLicenseConfigForSnapshot(array $LicenseConfig): array {
+        foreach (array('validation_key') as $SensitiveName) {
+            if (isset($LicenseConfig[$SensitiveName])) {
+                $LicenseConfig[$SensitiveName] = '[redacted]';
+            }
+        }
+        return $LicenseConfig;
+    }
+
+    private function parseLicenseSubscription(array $LicenseConfig) {
+        if (empty($LicenseConfig['subscription'])) {
+            return null;
+        }
+        $Decoded = json_decode($LicenseConfig['subscription'], true);
+        if (!is_array($Decoded)) {
+            return array(
+                '_parse_error' => json_last_error_msg(),
+                '_raw' => $LicenseConfig['subscription'],
+            );
+        }
+        return $Decoded;
+    }
+
+    private function collectDatabaseUsage(): array {
+        $DbName = $this->SugarConfig['dbconfig']['db_name'];
+        $DbNameQuoted = $this->PDO->quote($DbName);
+        $SummarySQL = "
+SELECT
+    COUNT(*) AS table_count,
+    ROUND(SUM(data_length) / 1024 / 1024 / 1024, 4) AS data_gb,
+    ROUND(SUM(index_length) / 1024 / 1024 / 1024, 4) AS index_gb,
+    ROUND(SUM(data_length + index_length) / 1024 / 1024 / 1024, 4) AS total_gb
+FROM information_schema.TABLES
+WHERE table_schema = {$DbNameQuoted}";
+        $Summary = $this->PDO->query($SummarySQL)->fetch(PDO::FETCH_ASSOC);
+
+        $TableSQL = "
+SELECT
+    table_name,
+    table_rows,
+    ROUND(data_length / 1024 / 1024 / 1024, 4) AS data_gb,
+    ROUND(index_length / 1024 / 1024 / 1024, 4) AS index_gb,
+    ROUND((data_length + index_length) / 1024 / 1024 / 1024, 4) AS total_gb
+FROM information_schema.TABLES
+WHERE table_schema = {$DbNameQuoted}
+ORDER BY data_length + index_length DESC, table_name";
+        $Tables = $this->PDO->query($TableSQL)->fetchAll(PDO::FETCH_ASSOC);
+
+        return array(
+            'name' => $DbName,
+            'summary' => $Summary,
+            'tables' => $Tables,
+        );
+    }
+
+    private function collectFileUsage(string $UploadPath): array {
+        $Result = array(
+            'path' => $UploadPath,
+            'exists' => file_exists($UploadPath),
+            'is_dir' => is_dir($UploadPath),
+            'summary' => array(
+                'file_count' => 0,
+                'bytes' => 0,
+                'gb' => 0,
+            ),
+            'modified_years' => array(),
+            'error' => null,
+        );
+
+        if (!is_dir($UploadPath)) {
+            $Result['error'] = "Upload path is not a directory.";
+            return $Result;
+        }
+
+        $Command = "find " . escapeshellarg($UploadPath) . " -type f -printf '%TY %s\n' 2>/dev/null | awk '{count[$1]++; bytes[$1]+=$2} END {for (y in count) print y \"\\t\" count[y] \"\\t\" bytes[y]}'";
+        exec($Command, $Output, $ReturnCode);
+        if ($ReturnCode !== 0) {
+            $Result['error'] = "File scan command returned {$ReturnCode}.";
+            return $Result;
+        }
+
+        foreach ($Output as $Line) {
+            $Parts = explode("\t", trim($Line));
+            if (count($Parts) !== 3) {
+                continue;
+            }
+            $Year = $Parts[0];
+            $Count = (int) $Parts[1];
+            $Bytes = (int) $Parts[2];
+            $Result['modified_years'][$Year] = array(
+                'file_count' => $Count,
+                'bytes' => $Bytes,
+                'gb' => round($Bytes / 1024 / 1024 / 1024, 4),
+            );
+            $Result['summary']['file_count'] += $Count;
+            $Result['summary']['bytes'] += $Bytes;
+        }
+
+        ksort($Result['modified_years']);
+        $Result['summary']['gb'] = round($Result['summary']['bytes'] / 1024 / 1024 / 1024, 4);
+        return $Result;
+    }
+
+    private function getDataUsageOutputDir(): string {
+        if (is_dir('cloud_support') && is_writable('cloud_support')) {
+            return 'cloud_support';
+        }
+        return getcwd();
+    }
+
+    private function sanitizeFilename(string $Value): string {
+        $Value = trim($Value);
+        $Value = preg_replace('/[^A-Za-z0-9_.-]+/', '_', $Value);
+        $Value = trim($Value, '_');
+        return $Value === '' ? 'unknown' : $Value;
     }
     
     private function searchManifests($Command) {
