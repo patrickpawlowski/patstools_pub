@@ -117,6 +117,7 @@ class sugarutils {
     }
     
     private function backupConfigs() {
+        $this->ensureCloudSupportFolder();
         $Filename = "configs_" . date('YmdHmis') . ".zip";
         $Command = "zip cloud_support/{$Filename} config*.php";
         $this->echoc("Backing up config files . . .\n", 'label');
@@ -1914,6 +1915,125 @@ WHERE parent_id IS NOT NULL
         }
     }
 
+    private function ensureCloudSupportFolder(): void {
+        if (!is_dir('cloud_support')) {
+            mkdir('cloud_support', 0775, true);
+        }
+    }
+
+    private function backupCustomAndModulesToCloudSupport(): string {
+        $this->ensureCloudSupportFolder();
+        $Filename = "cloud_support/custom_and_modules_" . date('Y-m-d_H-i') . ".tar.gz";
+        $Command = "tar -czf {$Filename} custom/ modules/";
+        $this->echoc("Backing up custom and modules folders . . .\n", 'label');
+        $this->echoc($Command . PHP_EOL, 'command');
+        system($Command);
+        system("ls -hal {$Filename}");
+        return $Filename;
+    }
+
+    private function createSugarutilsCleanupLog(string $Name): string {
+        $this->ensureCloudSupportFolder();
+        $SafeName = preg_replace('/[^a-z0-9_-]+/i', '_', strtolower($Name));
+        return "cloud_support/sugarutils_cleanup_{$SafeName}_" . date('Y-m-d_H-i-s') . ".log";
+    }
+
+    private function logCleanupLine(string $LogFile, string $Message): void {
+        file_put_contents($LogFile, $Message . PHP_EOL, FILE_APPEND);
+    }
+
+    private function displayAndLogCleanupLine(string $LogFile, string $Message, string $Color = 'label'): void {
+        $this->echoc($Message . PHP_EOL, $Color);
+        $this->logCleanupLine($LogFile, $Message);
+    }
+
+    private function removeCleanupPaths(string $Title, array $Paths, string $LogFile): int {
+        $Paths = array_values(array_unique(array_filter(array_map('trim', $Paths))));
+        $ExistingPaths = [];
+        foreach ($Paths as $Path) {
+            if (file_exists($Path) || is_link($Path)) {
+                $ExistingPaths[] = $Path;
+            }
+        }
+
+        if (!$ExistingPaths) {
+            $this->displayAndLogCleanupLine($LogFile, "{$Title}: All's Well. Nothing to remove.", 'green');
+            return 0;
+        }
+
+        $this->displayAndLogCleanupLine($LogFile, "{$Title}: removing " . count($ExistingPaths) . " path(s).", 'yellow');
+        foreach ($ExistingPaths as $Path) {
+            $this->displayAndLogCleanupLine($LogFile, "Removing {$Path}", 'command');
+            $this->removePath($Path);
+        }
+
+        return count($ExistingPaths);
+    }
+
+    private function findCleanupPaths(string $Root, string $Pattern): array {
+        if (!is_dir($Root)) {
+            return [];
+        }
+
+        $Paths = [];
+        $Iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($Root, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($Iterator as $Item) {
+            if (fnmatch($Pattern, $Item->getFilename())) {
+                $Paths[] = $Item->getPathname();
+            }
+        }
+
+        return $Paths;
+    }
+
+    private function extractRmPathsFromCommands(string $Commands): array {
+        $Paths = [];
+        foreach (preg_split('/\R/', $Commands) ?: [] as $Line) {
+            $Line = trim($Line);
+            if ($Line === '' || strpos($Line, 'rm -r ') !== 0) {
+                continue;
+            }
+            $Paths[] = trim(substr($Line, 6));
+        }
+        return $Paths;
+    }
+
+    private function logMatchingLines(string $Title, array $Files, string $Needle, string $LogFile, bool $QuietWhenEmpty = false): int {
+        $Matches = [];
+        foreach ($Files as $File) {
+            if (!is_file($File) || !is_readable($File)) {
+                continue;
+            }
+            $Lines = file($File);
+            if ($Lines === false) {
+                continue;
+            }
+            foreach ($Lines as $LineNumber => $Line) {
+                if (stripos($Line, $Needle) !== false) {
+                    $Matches[] = $File . ':' . ($LineNumber + 1) . ': ' . rtrim($Line);
+                }
+            }
+        }
+
+        if (!$Matches) {
+            if ($QuietWhenEmpty) {
+                return 0;
+            }
+            $this->displayAndLogCleanupLine($LogFile, "{$Title}: All's Well. No lingering references found.", 'green');
+            return 0;
+        }
+
+        $this->displayAndLogCleanupLine($LogFile, "{$Title}: manual review needed for " . count($Matches) . " line(s).", 'yellow');
+        foreach ($Matches as $Match) {
+            $this->displayAndLogCleanupLine($LogFile, $Match, 'command');
+        }
+        return count($Matches);
+    }
+
     private function displayBftHistory(array $Session): void {
         $History = $Session['history'] ?? [];
         if (!$History) {
@@ -2354,13 +2474,7 @@ Thanks for helping us out with this,
             $this->ask('Press enter to continue');
             return;
         }
-        $Cmd1 = "tar -czf custom_and_modules_$(date +%Y-%m-%d_%H-%M).tar.gz custom/ modules/";
-        $this->echoc("Backing up custom and modules folders . . .\n", 'label');
-        $this->echoc($Cmd1 . PHP_EOL, 'command');
-        system($Cmd1);
-
-        $Cmd1 = "ls -hal custom_and_modules_*.tar.gz";
-        system($Cmd1);
+        $this->backupCustomAndModulesToCloudSupport();
         $this->echoc("Before continuing please confirm that the backup file was created above and that it has data. i.e., it is not empty.\n", 'label');
         $Continue = $this->ask('Type "continue" and press enter to continue.');
         if ($Continue != 'continue') {
@@ -2386,7 +2500,7 @@ Thanks for helping us out with this,
         chdir("{$this->InstanceInfo['SHADOW']}/modules/");
 //        system($Cmd4);
 
-        $Cmd5 = "cat ../core_modules.txt | xargs rm -rv 2> /dev/null | tee ~/forked_modules_removed_$(date +%Y-%m-%d_%H-%M).log";
+        $Cmd5 = "cat ../core_modules.txt | xargs rm -rv 2> /dev/null | tee ../cloud_support/forked_modules_removed_$(date +%Y-%m-%d_%H-%M).log";
         $this->echoc("Removing any modules on the list of core modules . . .\n", 'label');
         $this->echoc($Cmd5 . PHP_EOL, 'command');
         system($Cmd5);
@@ -2399,10 +2513,7 @@ Thanks for helping us out with this,
 
         $this->echoc("Forked Core Modules have been removed.", 'label');
         
-        $this->echoc("Cleaning up files from versions < Sugar 14\n", 'label');
-        $Cmd7 = 'rm -r "include/FCKeditor/editor/filemanager/browser/default/connectors/php/config.php" "include/FCKeditor/editor/filemanager/upload/php/config.php" "include/javascript/tiny_mce/plugins/spellchecker/config.php" "include/SubPanel/SubPanelTilesTabs.php" "include/SugarObjects/templates/basic/Dashlets/Dashlet/m-n-Dashlet.php" "include/SugarObjects/templates/company/config.php" "include/tcpdf/config/tcpdf_config.php" "modules/Administration/System.php" "modules/Administration/views/view.themesettings.php" "modules/Connectors/connectors/sources/ext/rest/dnb/config.php" "modules/Connectors/connectors/sources/ext/rest/linkedin/config.php" "modules/Connectors/connectors/sources/ext/rest/zoominfocompany/config.php" "modules/Connectors/connectors/sources/ext/rest/zoominfoperson/config.php" "modules/Connectors/connectors/sources/ext/soap/hoovers/config.php" "modules/DCEClients/dce_config.php" "modules/disabled/" "modules/Disabled/" "modules/EditCustomFields/" "modules/EmailMan/config.php" "modules/Emails/views/view.classic.config.php" "modules/Feeds/Feed.php" "modules/Forecasts/clients/base/layouts/config/config.php" "modules/ForecastSchedule/" "modules/iFrames/" "modules/Import/config.php" "modules/Import/ImportMap.php" "modules/Import/ImportStep4.php" "modules/KBDocumentRevisions/KBDocumentRevision.php" "modules/KBDocuments/EditView.php" "modules/KBTags/" "modules/MergeRecords/MergeRecord.php" "modules/Studio/config.php" "modules/Studio/wizards/ManageBackups.php" "modules/SugarFeed/SugarFeed.php" "modules/Sync/config.php" "modules/Temp/" "modules/temp/" "modules/Users/UserSignature.php" "portal/include/language/_.lang.php" "portal/sugar_version.php"';
-        $this->echoc($Cmd7 . PHP_EOL, 'command');
-        system($Cmd7);
+        $this->cleanupPreSugar14Files();
         
         $RemoveCustomerJourney = $this->ask("If you like to also Manually Remove Customer Journey files please enter 'yes'\n");
         if ($RemoveCustomerJourney === 'yes') {
@@ -2413,13 +2524,60 @@ Thanks for helping us out with this,
     }
 
     private function backupCustomAndModulesFolders() {
-        $Filename = "custom_and_modules_" . date('Y-m-d_H-i') . ".tar.gz";
-        $Cmd1 = "tar -czf {$Filename} custom/ modules/";
-        $this->echoc("Backing up custom and modules folders . . .\n", 'label');
-        $this->echoc($Cmd1 . PHP_EOL, 'command');
-        system($Cmd1);
-        system("ls -hal {$Filename}");
+        $this->backupCustomAndModulesToCloudSupport();
         $this->ShowMenu = false;
+    }
+
+    private function cleanupPreSugar14Files(): void {
+        $this->echoc("Cleaning up files from versions < Sugar 14\n", 'label');
+        $LogFile = $this->createSugarutilsCleanupLog('pre_sugar_14_files');
+        $Paths = [
+            'include/FCKeditor/editor/filemanager/browser/default/connectors/php/config.php',
+            'include/FCKeditor/editor/filemanager/upload/php/config.php',
+            'include/javascript/tiny_mce/plugins/spellchecker/config.php',
+            'include/SubPanel/SubPanelTilesTabs.php',
+            'include/SugarObjects/templates/basic/Dashlets/Dashlet/m-n-Dashlet.php',
+            'include/SugarObjects/templates/company/config.php',
+            'include/tcpdf/config/tcpdf_config.php',
+            'modules/Administration/System.php',
+            'modules/Administration/views/view.themesettings.php',
+            'modules/Connectors/connectors/sources/ext/rest/dnb/config.php',
+            'modules/Connectors/connectors/sources/ext/rest/linkedin/config.php',
+            'modules/Connectors/connectors/sources/ext/rest/zoominfocompany/config.php',
+            'modules/Connectors/connectors/sources/ext/rest/zoominfoperson/config.php',
+            'modules/Connectors/connectors/sources/ext/soap/hoovers/config.php',
+            'modules/DCEClients/dce_config.php',
+            'modules/disabled/',
+            'modules/Disabled/',
+            'modules/EditCustomFields/',
+            'modules/EmailMan/config.php',
+            'modules/Emails/views/view.classic.config.php',
+            'modules/Feeds/Feed.php',
+            'modules/Forecasts/clients/base/layouts/config/config.php',
+            'modules/ForecastSchedule/',
+            'modules/iFrames/',
+            'modules/Import/config.php',
+            'modules/Import/ImportMap.php',
+            'modules/Import/ImportStep4.php',
+            'modules/KBDocumentRevisions/KBDocumentRevision.php',
+            'modules/KBDocuments/EditView.php',
+            'modules/KBTags/',
+            'modules/MergeRecords/MergeRecord.php',
+            'modules/Studio/config.php',
+            'modules/Studio/wizards/ManageBackups.php',
+            'modules/SugarFeed/SugarFeed.php',
+            'modules/Sync/config.php',
+            'modules/Temp/',
+            'modules/temp/',
+            'modules/Users/UserSignature.php',
+            'portal/include/language/_.lang.php',
+            'portal/sugar_version.php',
+        ];
+
+        $Removed = $this->removeCleanupPaths('Pre-Sugar 14 cleanup', $Paths, $LogFile);
+        if ($Removed > 0) {
+            $this->echoc("Pre-Sugar 14 cleanup log: {$LogFile}\n", 'label');
+        }
     }
 
     private function manuallyRemoveCustomerJourney($SkipBackup = false) {
@@ -2428,15 +2586,14 @@ Thanks for helping us out with this,
             return;
         }
         if (!$SkipBackup) {
-            $Command1 = 'tar -czf custom_and_modules_$(date +%Y-%m-%d_%H-%M).tar.gz custom/ modules/';
-            $this->echoc("Backing up the custom and modules folders\n", 'label');
-            $this->echoc("" . $Command1 . PHP_EOL, 'command');
-            system($Command1);
+            $this->backupCustomAndModulesToCloudSupport();
         }
 
-        $this->echoc("Deleting files . . .", 'label');
+        $this->echoc("Deleting Customer Journey files . . .\n", 'label');
 
-        system('rm -r custom/Extension/application/Ext/Include/addoptify-customer-journey.php
+        $LogFile = $this->createSugarutilsCleanupLog('customer_journey');
+        $CustomerJourneyPaths = $this->extractRmPathsFromCommands(<<<'TXT'
+rm -r custom/Extension/application/Ext/Include/addoptify-customer-journey.php
 rm -r custom/Extension/application/Ext/JSGroupings/customerJourneyGroupings.php
 rm -r custom/Extension/application/Ext/Language/ar_SA.dri-customer-journey.php
 rm -r custom/Extension/application/Ext/Language/bg_BG.dri-customer-journey.php
@@ -2859,28 +3016,40 @@ rm -r modules/DRI_SubWorkflows/
 rm -r modules/DRI_Workflow_Task_Templates/
 rm -r modules/DRI_Workflow_Templates/
 rm -r modules/DRI_Workflows/
-');
-        $Command2 = 'find custom -name "*customer-journey*" | xargs rm -r';
-        $this->echoc($Command2 . PHP_EOL, 'command');
-        system($Command2);
+TXT);
+        $CustomerJourneyPaths = array_merge(
+            $CustomerJourneyPaths,
+            $this->findCleanupPaths('custom', '*customer-journey*'),
+            $this->findCleanupPaths('custom', 'DRI_*'),
+            $this->findCleanupPaths('custom', 'CJ_*')
+        );
 
-        $Command3 = 'grep -ril customer_journey custom';
-        $this->echoc($Command3 . PHP_EOL, 'command');
-        system($Command3);
+        $Removed = $this->removeCleanupPaths('Customer Journey cleanup', $CustomerJourneyPaths, $LogFile);
 
-        $Command4 = 'find custom -name "DRI_*" | xargs rm -r';
-        $this->echoc($Command4 . PHP_EOL, 'command');
-        system($Command4);
+        $CustomFiles = [];
+        if (is_dir('custom')) {
+            $Iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator('custom', FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($Iterator as $Item) {
+                if ($Item->isFile()) {
+                    $CustomFiles[] = $Item->getPathname();
+                }
+            }
+        }
 
-        $Command5 = 'find custom -name "CJ_*" | xargs rm -r';
-        $this->echoc($Command5 . PHP_EOL, 'command');
-        system($Command5);
+        $ReferenceMatches = 0;
+        $ReferenceMatches += $this->logMatchingLines('Customer Journey customer_journey reference scan', $CustomFiles, 'customer_journey', $LogFile, true);
+        $ReferenceMatches += $this->logMatchingLines('Customer Journey cj_/dri_ module registry scan', ['custom/application/Ext/Include/modules.ext.php'], 'cj_', $LogFile, true);
+        $ReferenceMatches += $this->logMatchingLines('Customer Journey dri_ module registry scan', ['custom/application/Ext/Include/modules.ext.php'], 'dri_', $LogFile, true);
 
-        $Command6 = "grep -i 'cj_\|dri_' custom/application/Ext/Include/modules.ext.php";
-        $this->echoc($Command6 . PHP_EOL, 'command');
-        system($Command6);
+        if ($Removed > 0 && $ReferenceMatches === 0) {
+            $this->displayAndLogCleanupLine($LogFile, 'Customer Journey reference scan: All\'s Well. No lingering references found.', 'green');
+        }
 
-        $this->echoc("\n\nIf the above command found any CJ_ or DRI_ then edit custom/application/Ext/Include/modules.ext.php and remove all the reference to CJ or DRI\n", 'red');
+        if ($Removed > 0 || $ReferenceMatches > 0) {
+            $this->echoc("Customer Journey cleanup log: {$LogFile}\n", 'label');
+        }
         exit();
     }
 
