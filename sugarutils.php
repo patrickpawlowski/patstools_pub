@@ -186,6 +186,7 @@ class sugarutils {
         $this->Commands = array(
             'sc' => array('label' => 'Search custom Folder', 'method' => 'searchCustomFolder', 'section' => 'Search'),
             'sdl' => array('label' => 'Search Dropdown List', 'method' => 'searchDropdownLists', 'section' => 'Search'),
+            'sp' => array('label' => 'Search Package Source', 'method' => 'searchPackageSource', 'section' => 'Search'),
             'su' => array('label' => 'Search upgrades/module Folder', 'method' => 'searchUpgradesFolder', 'section' => 'Search'),
             'suz' => array('label' => 'Search upgrades/module Folder zips', 'method' => 'searchPackagesForString', 'section' => 'Search'),
             'sm' => array('label' => 'Search Manifests', 'method' => 'searchManifests', 'section' => 'Search'),
@@ -682,19 +683,69 @@ ORDER BY data_length + index_length DESC, table_name";
     }
     
     private function searchManifests($Command) {
-        $SearchString = trim(substr($Command, 2));
+        $SearchString = $this->getCommandArgument($Command);
+        if (!$SearchString) {
+            $SearchString = $this->ask("String to search for: ");
+        }
         utils::echoc("Searching manifests in upgrade_history for '{$SearchString}' . . . \n", 'label');
-        $SQL = "SELECT * FROM upgrade_history ORDER BY date_modified DESC;";
-        foreach($this->PDO->query($SQL) as $Row){
-            $this->echoc("{$Row['name']} v{$Row['version']}\n", 'data');
-            $Manifest = json_encode(unserialize(base64_decode($Row['manifest'])), JSON_PRETTY_PRINT);
-            if(substr_count(strtoupper($Manifest), strtoupper($SearchString))){
-                $this->echoc("Manifest:\n", 'label');
-                $this->echoc($Manifest, 'data');
-            }
+        $Matches = $this->findManifestMatches($SearchString);
+        if (!$Matches) {
+            $this->echoc("No matching installed package manifests found.\n", 'green');
+        } else {
+            $this->displayManifestMatches($Matches);
         }
         $this->ShowMenu = false;
-    }    
+    }
+
+    private function findManifestMatches(string $SearchString): array {
+        $Matches = array();
+        if ($SearchString === '') {
+            return $Matches;
+        }
+
+        $SQL = "SELECT id, name, version, filename, date_modified, manifest
+                  FROM upgrade_history
+                 WHERE deleted = 0
+                 ORDER BY date_modified DESC";
+        foreach ($this->PDO->query($SQL, PDO::FETCH_ASSOC) as $Row) {
+            $EncodedManifest = (string) ($Row['manifest'] ?? '');
+            $DecodedManifest = base64_decode($EncodedManifest, true);
+            if ($DecodedManifest === false) {
+                $DecodedManifest = $EncodedManifest;
+            }
+
+            $ManifestData = @unserialize($DecodedManifest, array('allowed_classes' => false));
+            $SearchableManifest = is_array($ManifestData)
+                ? (string) json_encode($ManifestData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+                : $DecodedManifest;
+            $Searchable = implode("\n", array(
+                (string) ($Row['name'] ?? ''),
+                (string) ($Row['filename'] ?? ''),
+                $SearchableManifest,
+            ));
+            if (stripos($Searchable, $SearchString) === false) {
+                continue;
+            }
+
+            $Row['DecodedManifest'] = $SearchableManifest;
+            $Matches[] = $Row;
+        }
+
+        return $Matches;
+    }
+
+    private function displayManifestMatches(array $Matches): void {
+        foreach ($Matches as $Match) {
+            $Name = trim((string) ($Match['name'] ?? '')) ?: 'Unnamed package';
+            $Version = trim((string) ($Match['version'] ?? ''));
+            $this->echoc("{$Name}" . ($Version !== '' ? " v{$Version}" : '') . "\n", 'data');
+            if (!empty($Match['filename'])) {
+                $this->echoc("FILE: {$Match['filename']}\n", 'command');
+            }
+            $this->echoc("MANIFEST:\n", 'label');
+            $this->echoc(rtrim((string) ($Match['DecodedManifest'] ?? '')) . "\n", 'data');
+        }
+    }
     private function checkForEnumFieldsMissingList($Command) {
         utils::echoc("Checking fields_meta_data for enum fields missing lists . . . ", 'label');
         $SQL = "SELECT count(*) FROM fields_meta_data WHERE TYPE LIKE '%enum%' AND (ifnull(ext1, '') = '');";
@@ -765,19 +816,50 @@ ORDER BY data_length + index_length DESC, table_name";
     }
 
     private function searchPackagesForString($Command) {
-        $CommandArray = explode(' ', $Command);
-        $CommandArray[0] = '';
-        $SearchString = trim(implode(' ', $CommandArray));
+        $SearchString = $this->getCommandArgument($Command);
         if (!$SearchString) {
             $SearchString = $this->ask("String to search for: ");
         }
         $this->echoc("Searching zip files in upgrades/modules for: ", 'label');
         $this->echoc($SearchString . PHP_EOL, 'data');
-        $Cmd = "grep -r '{$SearchString}' custom";
-        $Cmd = "for z in upgrades/module/*.zip; do unzip -l \"\$z\" | grep  \"{$SearchString}\" | awk -F \"\" -v \"z=\$z\" \"{print $1 z} \"; done";
-        $this->echoc($Cmd . PHP_EOL, 'magenta');
-        system($Cmd);
+        $Matches = $this->findZipEntryMatches($SearchString);
+        if (!$Matches) {
+            $this->echoc("No matching files found inside upgrades/module ZIP archives.\n", 'green');
+        } else {
+            $this->displayZipEntryMatches($Matches);
+        }
         $this->ShowMenu = false;
+    }
+
+    private function findZipEntryMatches(string $SearchString): array {
+        $Matches = array();
+        if ($SearchString === '' || !is_dir('upgrades/module')) {
+            return $Matches;
+        }
+
+        $ZipFiles = glob('upgrades/module/*.zip') ?: array();
+        sort($ZipFiles, SORT_NATURAL | SORT_FLAG_CASE);
+        foreach ($ZipFiles as $ZipFile) {
+            $Entries = array();
+            $ReturnCode = 0;
+            exec('unzip -Z1 ' . escapeshellarg($ZipFile) . ' 2>/dev/null', $Entries, $ReturnCode);
+            if ($ReturnCode !== 0) {
+                continue;
+            }
+            foreach ($Entries as $Entry) {
+                if (stripos($Entry, $SearchString) !== false) {
+                    $Matches[] = array('Archive' => $ZipFile, 'Entry' => $Entry);
+                }
+            }
+        }
+
+        return $Matches;
+    }
+
+    private function displayZipEntryMatches(array $Matches): void {
+        foreach ($Matches as $Match) {
+            $this->echoc("{$Match['Archive']}: {$Match['Entry']}\n", 'command');
+        }
     }
     
     private function checkForIssue95830() {
@@ -2099,19 +2181,154 @@ WHERE parent_id IS NOT NULL
         $this->ShowMenu = false;
     }
 
+    private function searchPackageSource($Command) {
+        $Arguments = $this->getCommandArgument($Command);
+        $ArgumentParts = preg_split('/\s+/', $Arguments, 2) ?: array();
+        $FileName = trim((string) ($ArgumentParts[0] ?? ''));
+        $ListName = trim((string) ($ArgumentParts[1] ?? ''));
+        if ($FileName === '') {
+            $FileName = trim($this->ask("File path or filename to locate: "));
+        }
+        if ($ListName === '') {
+            $ListName = trim($this->ask("Options list name, if different from the filename (optional): "));
+        }
+        if ($FileName === '') {
+            $this->echoc("A file path or filename is required.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+
+        $BaseName = pathinfo(basename($FileName), PATHINFO_FILENAME);
+        $SearchTerms = array_values(array_unique(array_filter(
+            array($FileName, $BaseName, $ListName),
+            static fn($Value): bool => trim((string) $Value) !== ''
+        )));
+
+        $this->echoc("[Package Source Search]\n", 'section');
+        $this->echoc("File: {$FileName}\n", 'data');
+        if ($ListName !== '') {
+            $this->echoc("Options list: {$ListName}\n", 'data');
+        }
+
+        if (!$this->upgradeModuleFolderHasFiles()) {
+            $this->echoc("No files were found in upgrades/module; skipping filesystem and ZIP searches.\n", 'yellow');
+        } else {
+            foreach ($SearchTerms as $SearchTerm) {
+                $this->echoc("Searching upgrades/module files for: {$SearchTerm}\n", 'label');
+                $Matches = $this->findUpgradeFolderMatches($SearchTerm);
+                if ($Matches) {
+                    $this->displayUpgradeFolderMatches($Matches);
+                    $this->echoc("Package source candidate found. Search complete.\n", 'green');
+                    $this->ShowMenu = false;
+                    return;
+                }
+                $this->echoc("No matching unpacked package files found.\n", 'green');
+            }
+
+            foreach ($SearchTerms as $SearchTerm) {
+                $this->echoc("Searching upgrades/module ZIP entries for: {$SearchTerm}\n", 'label');
+                $Matches = $this->findZipEntryMatches($SearchTerm);
+                if ($Matches) {
+                    $this->displayZipEntryMatches($Matches);
+                    $this->echoc("Package ZIP candidate found. Search complete.\n", 'green');
+                    $this->ShowMenu = false;
+                    return;
+                }
+                $this->echoc("No matching ZIP entries found.\n", 'green');
+            }
+        }
+
+        foreach ($SearchTerms as $SearchTerm) {
+            $this->echoc("Searching installed package manifests for: {$SearchTerm}\n", 'label');
+            $Matches = $this->findManifestMatches($SearchTerm);
+            if ($Matches) {
+                $this->displayManifestMatches($Matches);
+                $this->echoc("Installed package manifest candidate found. Search complete.\n", 'green');
+                $this->ShowMenu = false;
+                return;
+            }
+            $this->echoc("No matching installed package manifests found.\n", 'green');
+        }
+
+        $this->echoc("Could not locate a package containing this file.\n", 'yellow');
+        $this->ShowMenu = false;
+    }
+
+    private function getCommandArgument($Command): string {
+        $Parts = preg_split('/\s+/', trim((string) $Command), 2) ?: array();
+        return trim((string) ($Parts[1] ?? ''));
+    }
+
+    private function upgradeModuleFolderHasFiles(): bool {
+        if (!is_dir('upgrades/module')) {
+            return false;
+        }
+        try {
+            $Iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator('upgrades/module', FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($Iterator as $FileInfo) {
+                if ($FileInfo->isFile()) {
+                    return true;
+                }
+            }
+        } catch (UnexpectedValueException $Exception) {
+            return false;
+        }
+        return false;
+    }
+
+    private function findUpgradeFolderMatches(string $SearchString): array {
+        if ($SearchString === '' || !is_dir('upgrades/module')) {
+            return array();
+        }
+
+        $Matches = array();
+        $ReturnCode = 0;
+        $Command = 'grep -rIlF -- '
+            . escapeshellarg($SearchString)
+            . ' upgrades/module/ 2>/dev/null';
+        exec($Command, $Matches, $ReturnCode);
+        if ($ReturnCode !== 0 || !$Matches) {
+            return array();
+        }
+
+        $Matches = array_values(array_unique(array_filter(array_map('trim', $Matches))));
+        usort($Matches, static function (string $Left, string $Right): int {
+            return ((int) @filemtime($Left)) <=> ((int) @filemtime($Right));
+        });
+        return $Matches;
+    }
+
+    private function displayUpgradeFolderMatches(array $Matches): void {
+        foreach ($Matches as $File) {
+            $Size = @filesize($File);
+            $Modified = @filemtime($File);
+            $Details = array();
+            if ($Size !== false) {
+                $Details[] = number_format($Size) . ' bytes';
+            }
+            if ($Modified !== false) {
+                $Details[] = date('Y-m-d H:i:s T', $Modified);
+            }
+            $Suffix = $Details ? ' (' . implode(', ', $Details) . ')' : '';
+            $this->echoc($File . $Suffix . "\n", 'command');
+        }
+    }
+
     private function searchUpgradesFolder($Command) {
-        $CommandArray = explode(' ', $Command);
-        $CommandArray[0] = '';
-        $SearchString = trim(implode(' ', $CommandArray));
+        $SearchString = $this->getCommandArgument($Command);
         if (!$SearchString) {
             $SearchString = $this->ask("String to search for: ");
         }
         $this->echoc("Searching upgrades folder for: ", 'label');
         $this->echoc($SearchString . PHP_EOL, 'date');
-        $Cmd = "grep -rl '{$SearchString}' upgrades/module/ | sed 's/.*/\"&\"/' | xargs ls -haltr ";
-
-        $this->echoc($Cmd . PHP_EOL, 'magenta');
-        system($Cmd);
+        $Matches = $this->findUpgradeFolderMatches($SearchString);
+        if (!$Matches) {
+            $this->echoc("No matching unpacked package files found.\n", 'green');
+        } else {
+            $this->displayUpgradeFolderMatches($Matches);
+        }
 //        $this->ask("Press enter to continue");
         $this->ShowMenu = false;
     }
