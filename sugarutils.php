@@ -1,16 +1,11 @@
 #! /usr/bin/env php
 <?php
 /*
- * 
-  wget https://wupgrade.wsysnet.com/patstools/sugarutils.php -O /usr/local/bin/sugarutils; chmod +xr /usr/local/bin/sugarutils
-  wget https://wupgrade.wsysnet.com/patstools/sugarutils.php -O sugarutils; chmod +xr sugarutils; ./sugarutils
- * 
-  curl https://wupgrade.wsysnet.com/patstools/sugarutils.php | php
- * 
- * 
- * 
-wget -q https://wsugardev1.w-systems.com/patstools/sugarutils -O sugarutils; php ./sugarutils
- * 
+ * Download and run:
+ * wget --https-only https://wupgrade.wsysnet.com/patstools/sugarutils.php -O sugarutils
+ * chmod 700 sugarutils
+ * ./sugarutils
+ *
  * 
  * TODO:
  * Add sql queries:
@@ -32,24 +27,7 @@ wget -q https://wsugardev1.w-systems.com/patstools/sugarutils -O sugarutils; php
  * 
  * 
  * 
-[ ] Add Shawn's Email Configuration Safety
-delete from outbound_email;
-DELETE FROM config WHERE category = 'notify';
-INSERT INTO `config` (`category`, `name`, `value`, `platform`)
-VALUES
-    ('notify', 'allow_default_outbound', '2', ''),
-    ('notify', 'fromaddress', 'do_not_reply@example.com', NULL),
-    ('notify', 'fromname', 'SugarCRM', NULL),
-    ('notify', 'on', '1', NULL),
-    ('notify', 'send_by_default', '1', NULL),
-    ('notify', 'send_from_assigning_user', '0', NULL);
-INSERT INTO `outbound_email` (`id`, `eapm_id`, `name`, `type`, `user_id`, `email_address_id`, `authorized_account`, `mail_authtype`, `reply_to_name`, `reply_to_email_address_id`, `mail_sendtype`, `mail_smtptype`, `mail_smtpserver`, `mail_smtpport`, `mail_smtpuser`, `mail_smtppass`, `mail_smtpauth_req`, `mail_smtpssl`, `preferred_sending_account`, `deleted`, `team_id`, `team_set_id`, `acl_team_set_id`)
-VALUES
-    ('e9c761a8-4d8e-11ee-9c8c-0684a87b501c', NULL, 'SugarCRMSupport', 'system', '1', '858904f6-56ff-11ee-9d93-02a5a97c2d5e', NULL, NULL, NULL, NULL, 'SMTP', 'other', 'sandbox.smtp.mailtrap.io', 587, '23d76f6eeeee9d47c', 'gal2WeeeeeZgjjZPmbA==', 1, 2, 0, 0, '1', '1', NULL),
-    ('ea35b2de-4d8e-11ee-8976-0684a87b501c', NULL, 'Administrator', 'system-override', '1', 'ea6039f0-4d8e-11ee-a253-0684a87b501c', NULL, NULL, NULL, NULL, 'SMTP', 'other', 'sandbox.smtp.mailtrap.io', 587, '23d76eeef6ec59d47c', 'eeeee+ebsfOe6bb', 1, 2, 0, 0, 'ea2a4afc-4d8e-11ee-bca9-0684a87b501c', 'ea2a4afc-4d8e-11ee-bca9-0684a87b501c', NULL);
- * 
- * 
- * 
+ * @todo Add an email configuration safety workflow without embedding credentials.
  */
 
 class sugarutils {
@@ -60,6 +38,8 @@ class sugarutils {
     private $Options;
     private $SugarConfig;
     private $PDO = false;
+    private $ReadOnlyPDO = false;
+    private $ReadOnlyConnectionName = '';
     private $InstanceInfo = array();
     private $Subscription = array();
     private $ShowMenu = true;
@@ -69,6 +49,7 @@ class sugarutils {
     const DATE_CMU_SECONDS = 'Y-m-d H:i:s T';
 
     public function __construct() {
+        umask(0077);
         ini_set('display_errors', 1);
         error_reporting(E_ALL & ~E_WARNING & ~E_NOTICE & ~E_DEPRECATED);
 
@@ -113,16 +94,35 @@ class sugarutils {
     }
 
     public function __destruct() {
-        exec("rm sugarutils");
+        $ScriptPath = realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''));
+        $WorkingDirectory = realpath(getcwd());
+        if ($ScriptPath !== false
+                && $WorkingDirectory !== false
+                && dirname($ScriptPath) === $WorkingDirectory
+                && basename($ScriptPath) === 'sugarutils') {
+            unlink($ScriptPath);
+        }
     }
     
     private function backupConfigs() {
         $this->ensureCloudSupportFolder();
         $Filename = "configs_" . date('YmdHmis') . ".zip";
-        $Command = "zip cloud_support/{$Filename} config*.php";
+        $ArchivePath = "cloud_support/{$Filename}";
+        $ConfigFiles = array_values(array_filter(glob('config*.php') ?: array(), 'is_file'));
+        if (!$ConfigFiles) {
+            $this->echoc("No config files found to back up.\n", 'yellow');
+            return;
+        }
+        $Command = 'zip ' . escapeshellarg($ArchivePath) . ' '
+            . implode(' ', array_map('escapeshellarg', $ConfigFiles));
         $this->echoc("Backing up config files . . .\n", 'label');
         $this->echoc($Command.PHP_EOL, 'command');
-        system($Command);
+        system($Command, $ExitCode);
+        if ($ExitCode !== 0 || !is_file($ArchivePath)) {
+            $this->echoc("Config backup failed.\n", 'red');
+            return;
+        }
+        chmod($ArchivePath, 0600);
     }
 
     private function displayInfo() {
@@ -761,7 +761,13 @@ ORDER BY data_length + index_length DESC, table_name";
     }
     
     private function watchSQL($Command) {
-//        $this->echoc("[Users]\n\n", 'brightblue');
+        $ReadOnlyPDO = $this->getReadOnlyPDO();
+        if (!$ReadOnlyPDO) {
+            $this->echoc("Watch SQL requires the reports or listviews database connection. The primary connection will not be used.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+
         $CommandArray = explode(' ', $Command);
         $CommandArray[0] = '';
         $SQL = trim(implode(' ', $CommandArray));
@@ -769,19 +775,29 @@ ORDER BY data_length + index_length DESC, table_name";
             $SQL = $this->ask("Query to watch: ");
         }
 
-        $SQL2 = $this->ask("If you would also like to watch a secoond query then please enter it here");
+        $SQL2 = $this->ask("If you would also like to watch a second query then please enter it here");
+        foreach (array_filter(array($SQL, $SQL2), static fn($Query): bool => trim((string) $Query) !== '') as $Query) {
+            if (!$this->isReadOnlyWatchQuery($Query)) {
+                $this->echoc("Watch SQL accepts one SELECT, SHOW, DESCRIBE, DESC, or EXPLAIN statement at a time.\n", 'red');
+                $this->ShowMenu = false;
+                return;
+            }
+        }
+
         $Interval = $this->ask("Enter the number of seconds to wait before rerunning the command. The default is 120 ");
-        $Interval = $Interval ? $Interval : 120;
-//        if($this->askYN("Would like to set up monitoring?")){
-//            echo "Yes I would\n";
-//        }else{
-//            echo "No, I wouldn't\n";
-//        }
-//        $SQL = "SELECT user_name, last_login, license_type FROM users WHERE NOT deleted AND status = 'Active' ORDER BY 2;";
+        $Interval = $Interval ? (int) $Interval : 120;
+        if ($Interval < 1 || $Interval > 86400) {
+            $this->echoc("The interval must be between 1 and 86400 seconds.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+
+        $this->ensureCloudSupportFolder();
+        $this->echoc("Using the {$this->ReadOnlyConnectionName} database connection.\n", 'label');
 
         while (true) {
             $this->echoc($SQL . PHP_EOL, 'magenta');
-            $Result = $this->PDO->query($SQL);
+            $Result = $ReadOnlyPDO->query($SQL);
             $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
             file_put_contents('./cloud_support/watch_sql.log', date("Y-m-d H:i:s e") . " | " . $this->InstanceInfo['INSTANCE'] . " | " . gethostname(), FILE_APPEND);
             file_put_contents('./cloud_support/watch_sql.log', json_encode($Rows, JSON_PRETTY_PRINT), FILE_APPEND);
@@ -789,7 +805,7 @@ ORDER BY data_length + index_length DESC, table_name";
             Utils::print_t($Rows);
             if ($SQL2) {
                 $this->echoc($SQL2 . PHP_EOL, 'magenta');
-                $Result2 = $this->PDO->query($SQL2);
+                $Result2 = $ReadOnlyPDO->query($SQL2);
                 $Rows2 = $Result2->fetchAll(PDO::FETCH_ASSOC);
                 file_put_contents('./cloud_support/watch_sql.log', json_encode($Rows2, JSON_PRETTY_PRINT), FILE_APPEND);
                 Utils::print_t($Rows2);
@@ -800,19 +816,26 @@ ORDER BY data_length + index_length DESC, table_name";
             $this->echoc("Waiting {$Interval} seconds\n", 'label');
             sleep($Interval);
         }
-//        foreach ($this->PDO->query($SQL) as $Row) {
-//            $UserName = str_pad($Row['user_name'], 35);
-//            $LastLogin = str_pad($Row['last_login'], 20);
-//            $this->echoc("{$UserName}\t{$LastLogin}\t{$Row['license_type']}\n", 'magenta');
-//        }±±
-//        echo "\n";
-//        $SQL2 = "SELECT count(*) `Count` FROM users WHERE NOT deleted AND status = 'Active';";
-//        $this->echoc($SQL2 . PHP_EOL, 'magenta');
-//        foreach ($this->PDO->query($SQL2) as $Row) {
-//            $UserCount = $Row['Count'];
-//            $this->echoc("Total active users: {$UserCount}\n", 'data');
-//        }
-        $this->ShowMenu = false;
+    }
+
+    private function isReadOnlyWatchQuery(string $SQL): bool {
+        $SQL = trim($SQL);
+        if ($SQL === '' || strpos($SQL, "\0") !== false) {
+            return false;
+        }
+
+        $WithoutTrailingTerminator = preg_replace('/;\s*$/', '', $SQL);
+        if (strpos($WithoutTrailingTerminator, ';') !== false) {
+            return false;
+        }
+        if (!preg_match('/^(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i', $SQL)) {
+            return false;
+        }
+        if (preg_match('/\bINTO\s+(OUTFILE|DUMPFILE)\b/i', $SQL)) {
+            return false;
+        }
+
+        return !preg_match('/\bLOAD_FILE\s*\(/i', $SQL);
     }
 
     private function searchPackagesForString($Command) {
@@ -1059,10 +1082,17 @@ WHERE parent_id IS NOT NULL
             $this->echoc("What's this -> ", 'red');
             if (is_dir($File)) {
                 $this->echoc($File . PHP_EOL, 'blue');
-                $FilesInFolder = array();
-                exec("find \"./{$File}\" -type f", $FilesInFolder);
-                foreach ($FilesInFolder as $FileInFolder) {
-                    $this->echoc("\t{$FileInFolder}\n", 'brightred');
+                try {
+                    $Iterator = new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($File, FilesystemIterator::SKIP_DOTS)
+                    );
+                    foreach ($Iterator as $FileInfo) {
+                        if ($FileInfo->isFile()) {
+                            $this->echoc("\t{$FileInfo->getPathname()}\n", 'brightred');
+                        }
+                    }
+                } catch (UnexpectedValueException $Exception) {
+                    $this->echoc("\tUnable to inspect this directory.\n", 'red');
                 }
             } else {
                 $this->echoc($File . PHP_EOL, 'brightblue');
@@ -1072,7 +1102,7 @@ WHERE parent_id IS NOT NULL
     }
 
     private function packageScan() {
-        $Cmd = "package-scan -i {$this->InstanceInfo['INSTANCE']}";
+        $Cmd = 'package-scan -i ' . escapeshellarg((string) $this->InstanceInfo['INSTANCE']);
         $this->echoc($Cmd . PHP_EOL, 'command');
         system($Cmd);
         $this->ShowMenu = false;
@@ -1171,7 +1201,7 @@ WHERE parent_id IS NOT NULL
                     AND data_type IN ('char','varchar', 'text','tinytext','mediumtext','longtext')
                     GROUP BY COLLATION_NAME;";
         $Result = $this->PDO->query($SQL);
-        $Collations = $Result->fetchAll();(PDO::FETCH_ASSOC);
+        $Collations = $Result->fetchAll(PDO::FETCH_ASSOC);
         if(count($Collations) === 0){
             $this->echoc("No collations found. Something is wrong. 🛑\n", 'red');
         }elseif(count($Collations) === 1){
@@ -1360,10 +1390,6 @@ WHERE parent_id IS NOT NULL
             $SQL = 'SELECT type, name, version, status, enabled, date_entered, date_modified FROM upgrade_history WHERE NOT deleted ORDER BY date_modified;';
         }
         $this->echoc("{$SQL}\n\n", 'command');
-//        $Command = "mysql -u'{$this->SugarConfig['dbconfig']['db_user_name']}' -p'{$this->SugarConfig['dbconfig']['db_password']}' -h'{$this->SugarConfig['dbconfig']['db_host_name']}' {$this->SugarConfig['dbconfig']['db_name']} -e\"SELECT type, name, status, enabled, date_entered, date_modified FROM upgrade_history WHERE NOT deleted ORDER BY date_modified;\"";
-        $Output = array();
-//        exec($Command, $Output);
-//        print_r($Output);
         $Results = array();
         
         foreach ($this->PDO->query($SQL, PDO::FETCH_ASSOC) as $Row) {
@@ -1395,10 +1421,6 @@ WHERE parent_id IS NOT NULL
     public function showUpgradeHistoryBak() {
         $SQL = 'SELECT type, name, status, enabled, date_entered, date_modified FROM upgrade_history_bak WHERE NOT deleted ORDER BY date_modified;';
         $this->echoc("{$SQL}\n\n", 'command');
-        $Command = "mysql -u'{$this->SugarConfig['dbconfig']['db_user_name']}' -p'{$this->SugarConfig['dbconfig']['db_password']}' -h'{$this->SugarConfig['dbconfig']['db_host_name']}' {$this->SugarConfig['dbconfig']['db_name']} -e\"SELECT type, name, status, enabled, date_entered, date_modified FROM upgrade_history WHERE NOT deleted ORDER BY date_modified;\"";
-        $Output = array();
-//        exec($Command, $Output);
-//        print_r($Output);
         foreach ($this->PDO->query($SQL) as $Row) {
             $this->echoc("| ", 'label');
             $this->echoc(str_pad($Row['type'], 10), 'data');
@@ -1999,18 +2021,38 @@ WHERE parent_id IS NOT NULL
 
     private function ensureCloudSupportFolder(): void {
         if (!is_dir('cloud_support')) {
-            mkdir('cloud_support', 0775, true);
+            mkdir('cloud_support', 0700, true);
+        }
+        chmod('cloud_support', 0700);
+
+        $AccessControl = "Options -Indexes\n"
+            . "<IfModule mod_authz_core.c>\n"
+            . "    Require all denied\n"
+            . "</IfModule>\n"
+            . "<IfModule !mod_authz_core.c>\n"
+            . "    Order allow,deny\n"
+            . "    Deny from all\n"
+            . "</IfModule>\n";
+        file_put_contents('cloud_support/.htaccess', $AccessControl, LOCK_EX);
+        chmod('cloud_support/.htaccess', 0600);
+        foreach (glob('cloud_support/configs_*.zip') ?: array() as $ConfigArchive) {
+            if (is_file($ConfigArchive)) {
+                chmod($ConfigArchive, 0600);
+            }
         }
     }
 
     private function backupCustomAndModulesToCloudSupport(): string {
         $this->ensureCloudSupportFolder();
         $Filename = "cloud_support/custom_and_modules_" . date('Y-m-d_H-i') . ".tar.gz";
-        $Command = "tar -czf {$Filename} custom/ modules/";
+        $Command = 'tar -czf ' . escapeshellarg($Filename) . ' custom/ modules/';
         $this->echoc("Backing up custom and modules folders . . .\n", 'label');
         $this->echoc($Command . PHP_EOL, 'command');
         system($Command);
-        system("ls -hal {$Filename}");
+        if (is_file($Filename)) {
+            chmod($Filename, 0600);
+        }
+        system('ls -hal ' . escapeshellarg($Filename));
         return $Filename;
     }
 
@@ -2140,13 +2182,19 @@ WHERE parent_id IS NOT NULL
         }
         $this->echoc("Searching custom/Extension/application/Ext/Language/ folder for: ", 'label');
         $this->echoc($SearchString . PHP_EOL, 'date');
-        $Cmd = "grep -rl '{$SearchString}' custom/Extension/application/Ext/Language/";
+        $Cmd = 'grep -rlF -- ' . escapeshellarg($SearchString)
+            . ' custom/Extension/application/Ext/Language/';
         $this->echoc($Cmd . PHP_EOL, 'magenta');
-        system($Cmd);
-
         $Files = array();
-        exec($Cmd, $Files);
-//        print_r($Files);
+        exec($Cmd, $Files, $ReturnCode);
+        if ($ReturnCode > 1) {
+            $this->echoc("Search failed with exit code {$ReturnCode}.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+        foreach ($Files as $File) {
+            $this->echoc($File . PHP_EOL, 'command');
+        }
         $this->echoc("Searching files for illegal characters. Skipping Order Mapping files\n", 'label');
         foreach ($Files as $File) {
             if (strpos($File, 'orderMapping') != false) {
@@ -2175,7 +2223,7 @@ WHERE parent_id IS NOT NULL
         }
         $this->echoc("Searching custom folder for: ", 'label');
         $this->echoc($SearchString . PHP_EOL, 'date');
-        $Cmd = "grep -r '{$SearchString}' custom";
+        $Cmd = 'grep -rF -- ' . escapeshellarg($SearchString) . ' custom';
         $this->echoc($Cmd . PHP_EOL, 'magenta');
         system($Cmd);
         $this->ShowMenu = false;
@@ -2345,10 +2393,17 @@ WHERE parent_id IS NOT NULL
     }
 
     private function findLargeFiles() {
-        $Size = $this->ask("Enter the minimum size as either xxxM or xxxG: ");
-        $Cmd = "find custom -type f -size +{$Size} | xargs ls -halS\n";
-        $this->echoc($Cmd, 'magenta');
+        $Size = trim($this->ask("Enter the minimum size as either xxxM or xxxG: "));
+        if (!preg_match('/^[1-9][0-9]*[MG]$/i', $Size)) {
+            $this->echoc("Size must be a positive number followed by M or G, such as 100M or 2G.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+        $Cmd = 'find custom -type f -size ' . escapeshellarg('+' . strtoupper($Size))
+            . ' -print0 | xargs -0 -r ls -halS';
+        $this->echoc($Cmd . PHP_EOL, 'magenta');
         system($Cmd);
+        $this->ShowMenu = false;
     }
 
     private function listUsers() {
@@ -2404,6 +2459,17 @@ WHERE parent_id IS NOT NULL
     public function runHealthCheck() {
         $Answer = $this->ask("Please enter the version of the Health Check you would like to run.\n14.0.3, 14.2.0, 25.1.0, 25.2.0, 26.1.0 (default 26.1.0)");
         $HealthCheckVersion = $Answer ? $Answer:'26.1.0';
+        if (!preg_match('/^[0-9]+\.[0-9]+\.[0-9]+$/', $HealthCheckVersion)) {
+            $this->echoc("Health Check version must use the numeric x.y.z format.\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
+        $HealthCheckPath = "/mnt/sugar/{$HealthCheckVersion}/sortinghat-{$HealthCheckVersion}.phar";
+        if (!is_file($HealthCheckPath)) {
+            $this->echoc("Health Check executable not found: {$HealthCheckPath}\n", 'red');
+            $this->ShowMenu = false;
+            return;
+        }
         $this->echoc("{$HealthCheckVersion} ", 'data');
         $this->echoc("it is then.\n", 'label');
         $RunQuickRepairandRebuild = $this->ask("Would you like to run a Quick Repair and Rebuild first? Y/n");
@@ -2415,7 +2481,7 @@ WHERE parent_id IS NOT NULL
         $this->echoc($Command1 . PHP_EOL, 'command');
         system($Command1);
         $this->echoc("- ▶️ Running Sugar {$HealthCheckVersion} Health Check on {$this->InstanceInfo['INSTANCE']}\n", 'label');
-        $Command2 = "shadowy /mnt/sugar/{$HealthCheckVersion}/sortinghat-{$HealthCheckVersion}.phar .";
+        $Command2 = 'shadowy ' . escapeshellarg($HealthCheckPath) . ' .';
         $this->echoc($Command2 . PHP_EOL, 'command');
         system($Command2, $ReturnValue);
         if($ReturnValue === 0){
@@ -2484,13 +2550,8 @@ WHERE parent_id IS NOT NULL
 
     private function showProcessList() {
         $this->echoc("[Running and Queued Jobs]\n\n", 'brightblue');
-        passthru("mysql -u{$this->SugarConfig['dbconfig']['db_user_name']} -p{$this->SugarConfig['dbconfig']['db_password']} -h{$this->SugarConfig['dbconfig']['db_host_name']} {$this->SugarConfig['dbconfig']['db_name']} -e 'show processlist;'");
-//        foreach($this->PDO->query("show processlist;") as $Row){
-//            $this->Subscription = json_decode($Row[0]);
-//            $Status = str_pad($Row['status'], 20);
-//            $Count = str_pad($Row['count'], 10);
-//            $this->echoc("{$Status}\t{$Count}\n", 'magenta');
-//        }
+        $Rows = $this->PDO->query('SHOW FULL PROCESSLIST')->fetchAll(PDO::FETCH_ASSOC);
+        Utils::print_t($Rows);
         echo "\n";
     }
 
@@ -2652,36 +2713,82 @@ WHERE parent_id IS NOT NULL
         }
     }
 
+    private function getReadOnlyPDO() {
+        if ($this->ReadOnlyPDO instanceof PDO) {
+            return $this->ReadOnlyPDO;
+        }
+
+        foreach (array('reports', 'listviews') as $ConnectionName) {
+            $Config = $this->SugarConfig['db'][$ConnectionName] ?? array();
+            $RequiredKeys = array('db_host_name', 'db_user_name', 'db_password', 'db_name');
+            $IsComplete = true;
+            foreach ($RequiredKeys as $RequiredKey) {
+                if (!isset($Config[$RequiredKey]) || trim((string) $Config[$RequiredKey]) === '') {
+                    $IsComplete = false;
+                    break;
+                }
+            }
+            if (!$IsComplete) {
+                continue;
+            }
+
+            $Port = isset($Config['db_port']) && trim((string) $Config['db_port']) !== ''
+                ? ';port=' . trim((string) $Config['db_port'])
+                : '';
+            $Dsn = "mysql:host={$Config['db_host_name']};dbname={$Config['db_name']}{$Port};charset=utf8mb4";
+            $Options = array(
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            );
+            if (defined('PDO::MYSQL_ATTR_MULTI_STATEMENTS')) {
+                $Options[PDO::MYSQL_ATTR_MULTI_STATEMENTS] = false;
+            }
+
+            try {
+                $PDO = new PDO($Dsn, $Config['db_user_name'], $Config['db_password'], $Options);
+                $PDO->query('SELECT 1')->fetchColumn();
+                $this->ReadOnlyPDO = $PDO;
+                $this->ReadOnlyConnectionName = $ConnectionName;
+                return $this->ReadOnlyPDO;
+            } catch (PDOException $Exception) {
+                $this->echoc("Unable to connect using the {$ConnectionName} database configuration.\n", 'yellow');
+            }
+        }
+
+        return false;
+    }
+
     private function generateMessage() {
-        echo "Hello {$this->Details['Recipients']}﻿﻿,
+        echo "Hello {$this->Details['Recipients']},
 
 Failed Health Check 
 We use a Health Check wizard to evaluate whether an instance is suitable for an upgrade. During the health check, various issues may be detected that can affect an instance's ability to upgrade. 
 
-Recently, in preparation for upcoming upgrades, ﻿﻿'s instance ﻿﻿ failed the health check with the following error:
+Recently, in preparation for upcoming upgrades, 's instance  failed the health check with the following error:
 
 Failed Upgrade
-A recent attempt to upgrade {$this->Details['AccountName']}﻿﻿'s instance(s) {$this->Details['InstanceNames']}﻿ has failed with the following issue(s):
+A recent attempt to upgrade {$this->Details['AccountName']}'s instance(s) {$this->Details['InstanceNames']} has failed with the following issue(s):
 
 {$this->Details['Issues']}
- ﻿﻿ 
+
 
 The following file(s) appear to be causing the issue(s).
 
-﻿﻿{$this->Details['Files']}
+{$this->Details['Files']}
 
 Related Support Article
-﻿﻿{$this->Details['LinkToHelpArticle']}
+{$this->Details['LinkToHelpArticle']}
 
 For us to solve this problem, we need your help.  
 
-The file appears to have been installed on {$this->Details['PackageDate']} as part of the {$this->Details['PackageName']}﻿﻿ package. Can you contact {$this->Details['PackageAuthor']}﻿﻿ and ask them to update the package to resolve the issue?
+The file appears to have been installed on {$this->Details['PackageDate']} as part of the {$this->Details['PackageName']} package. Can you contact {$this->Details['PackageAuthor']} and ask them to update the package to resolve the issue?
 
 Details from the package manifest
-{$this->Details['PackageManifestDetails']}﻿﻿ 
+{$this->Details['PackageManifestDetails']}
 
 Thanks for helping us out with this,
-{$this->Details['Sender']}﻿\n\n ";
+{$this->Details['Sender']}\n\n ";
     }
 
     private function removeForkedCoreModules() {
@@ -3307,30 +3414,6 @@ class Utils {
 
     public static function getUsername() {
         return $_SERVER['REMOTE_USER'];
-    }
-
-    public static function getUserFullName() {
-        switch ($_SERVER['REMOTE_USER']) {
-            case 'patpawlowski':
-                return 'Patrick Pawlowski';
-                break;
-
-            case 'jshannon':
-                return 'John Shannon';
-                break;
-
-            case 'atranca':
-                return 'Alex Tranca';
-                break;
-
-            case 'murucu':
-                return 'Marius-Cristian Urucu';
-                break;
-
-            default:
-                return $_SERVER['REMOTE_USER'];
-                break;
-        }
     }
 
     public static function getSugarAccountID(object $Case) {

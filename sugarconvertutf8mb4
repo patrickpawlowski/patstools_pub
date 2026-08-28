@@ -9,14 +9,16 @@
  * 
  * 
 
-wget https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4; php ./sugarconvertutf8mb4; rm ./sugarconvertutf8mb4
+wget --https-only https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4 -O sugarconvertutf8mb4
+chmod 700 sugarconvertutf8mb4
+php -l sugarconvertutf8mb4 && ./sugarconvertutf8mb4
 
  * 
  */
 
 if (isset($argv[1]) && $argv[1] == 'update') {
     $ScriptLocation = __FILE__;
-    $cmd = "wget https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4 -O /usr/local/bin/sugarconvertutf8mb4; chmod +xr /usr/local/bin/sugarconvertutf8mb4";
+    $cmd = "wget --https-only https://wupgrade.wsysnet.com/patstools/sugarconvertutf8mb4 -O /usr/local/bin/sugarconvertutf8mb4; chmod 755 /usr/local/bin/sugarconvertutf8mb4";
     echo $cmd.PHP_EOL;
     exec($cmd);
     die("Script updated\n\n");
@@ -27,14 +29,12 @@ if (isset($argv[1]) && $argv[1] == 'update') {
 require_once 'config.php';
 $db_host_name = $sugar_config['dbconfig']['db_host_name'];
 $db_user_name = $sugar_config['dbconfig']['db_user_name'];
-$db_passwprd = $sugar_config['dbconfig']['db_password'];
+$db_password = $sugar_config['dbconfig']['db_password'];
 $db_name = $sugar_config['dbconfig']['db_name'];
 
 echo "Sugar db hostname: ", $db_host_name, PHP_EOL;
 echo "Sugar db name: ", $db_name, PHP_EOL;
 echo "Sugar db username: ", $db_user_name, PHP_EOL;
-//echo "Sugar db password: ", $db_name, PHP_EOL;
-
 // Check for a parameter of "silent" and bypass the confirmation if it exists
 if (!in_array('silent', $argv)) {
     echo "\n\tThis script will attempt to alter the above database and all tables convertint them to utf8mb4. Enter y to agree or just press enter to cancel.\n ";
@@ -55,11 +55,11 @@ if (in_array('revert', $argv)) {
 $StartTime = new DateTime();
 echo date('Y-m-d H:i:s T')." updating collation on {$sugar_config['host_name']} to {$Collation}. . .".PHP_EOL;
 
-$mysqli = new mysqli($db_host_name, $db_user_name, $db_passwprd, $db_name);
+$mysqli = new mysqli($db_host_name, $db_user_name, $db_password, $db_name);
 if ($mysqli->connect_errno) {
     echo "Failed to connect to MySQL: (" . $mysqli->connect_errno . ") " . $mysqli->connect_error;
 }
-echo $mysqli->host_info . " xxxxxxxxxx\n";
+echo $mysqli->host_info . "\n";
 
 //$mysqli->query("ALTER DATABASE {$db_name} DEFAULT CHARACTER SET utf8mb4");
 //$mysqli->query("ALTER DATABASE {$db_name} DEFAULT COLLATE utf8mb4_general_ci");
@@ -123,4 +123,3 @@ echo "Total duration in minutes {$TotalMinutes}\n";
 //echo ' Total Elapsed Seconds: '.(time() - $StartTime).PHP_EOL;
 //echo ' Total Elapsed Minutes: '.(time() - $StartTime)/60 .PHP_EOL;
 //echo ' Total Elapsed Hours: '.(time() - $StartTime)/60/60 .PHP_EOL;
-
