@@ -410,6 +410,7 @@ class sugarutils {
             return;
         }
         if ($Option === 'q' || $Option === 'exit') {
+            $this->echoc("Leaving sugarutils; returning to the shell.\n", 'brightmagenta');
             exit();
         }
         if (empty($this->Commands[$Option])) {
@@ -498,11 +499,11 @@ class sugarutils {
         $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? 'Unknown Account');
         $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? 'Unknown');
         $Version = $this->singleLineValue($this->InstanceInfo['VERSION'] ?? 'Unknown');
-        $Created = $this->formatInstanceCreatedAt();
+        $ReportDate = gmdate('Y-m-d H:i T');
         $Report = array(
             '#### Language Extension Assessment for ' . $AccountName,
             '',
-            "Instance: {$InstanceName}  Version: {$Version}  Created: {$Created}",
+            "Instance: {$InstanceName}  Version: {$Version}  Report Date: {$ReportDate}",
             '',
         );
         if (!$ExistingFolders) {
@@ -734,37 +735,6 @@ class sugarutils {
 
     private function singleLineValue($Value) {
         return trim(str_replace(array("\r", "\n"), ' ', (string) $Value));
-    }
-
-    private function formatInstanceCreatedAt() {
-        $Created = '';
-        foreach (array(
-            'CREATED',
-            'CREATED_AT',
-            'CREATE_DATE',
-            'CREATED_DATE',
-            'DATE_CREATED',
-            'CREATION_DATE',
-            'INSTALL_DATE',
-        ) as $Key) {
-            if (!empty($this->InstanceInfo[$Key])) {
-                $Created = trim((string) $this->InstanceInfo[$Key]);
-                break;
-            }
-        }
-        if ($Created === '') {
-            return 'Unknown';
-        }
-
-        try {
-            if (ctype_digit($Created)) {
-                return gmdate('Y-m-d H:i T', (int) $Created);
-            }
-            $Date = new DateTimeImmutable($Created, new DateTimeZone('UTC'));
-            return $Date->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i T');
-        } catch (Exception $Exception) {
-            return $this->singleLineValue($Created);
-        }
     }
     
     private function dbManageSpace() {
@@ -2997,7 +2967,23 @@ WHERE parent_id IS NOT NULL
     private function ask($RequestText) {
         echo "\n{$RequestText}\n";
 //        return trim(fgets(STDIN)); // reads one line from STDIN  
-        return readline("{$this->Subscription['account_name']}->{$this->InstanceInfo['GROUP']} >"); 
+        return readline($this->buildSugarutilsPrompt());
+    }
+
+    private function buildSugarutilsPrompt() {
+        $AccountName = $this->terminalPromptValue($this->Subscription['account_name'] ?? 'Unknown Account');
+        $InstanceName = $this->terminalPromptValue(
+            $this->InstanceInfo['GROUP'] ?? $this->InstanceInfo['INSTANCE'] ?? 'Unknown Instance'
+        );
+        $ContextColor = "\001\033[36;1m\002";
+        $SugarutilsColor = "\001\033[35;1m\002";
+        $ResetColor = "\001\033[0m\002";
+        return "{$ContextColor}{$AccountName}->{$InstanceName}{$ResetColor}: "
+            . "{$SugarutilsColor}sugarutils{$ResetColor} > ";
+    }
+
+    private function terminalPromptValue($Value) {
+        return trim((string) preg_replace('/[\x00-\x1F\x7F]/', '', (string) $Value));
     }
 
     private function askm($RequestText) {
