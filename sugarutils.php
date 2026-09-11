@@ -42,7 +42,10 @@ class sugarutils {
     private $ReadOnlyConnectionName = '';
     private $InstanceInfo = array();
     private $Subscription = array();
-    private $ShowMenu = true;
+    private $ShowMenu = false;
+    private $StartupSummaryShown = false;
+    private $ActiveUserCount = null;
+    private $ForkedCoreModules = null;
     private $Commands = array();
     
     const DATE_CMU = 'Y-m-d H:i T';
@@ -148,6 +151,13 @@ class sugarutils {
         $this->echoc(" = ", 'red');
         $this->echoc("{$this->Subscription['quantity_c']}\n", 'data');
 
+        $ActiveUserCount = $this->getActiveUserCount();
+        if ($ActiveUserCount !== null) {
+            $this->echoc(str_pad("Active Users", 20), 'label');
+            $this->echoc(" = ", 'red');
+            $this->echoc("{$ActiveUserCount}\n", 'data');
+        }
+
         $this->echoc(str_pad("Product", 20), 'label');
         $this->echoc(" = ", 'red');
         $this->echoc("{$this->Subscription['product']}\n", 'data');
@@ -181,6 +191,106 @@ class sugarutils {
         if(!$this->Subscription['subscription_id']){
             $this->echoc("*** License not detected ***\n", "red");
         }
+        $ActiveUserCount = $this->getActiveUserCount();
+        $LicenseCount = isset($this->Subscription['quantity_c'])
+            ? (int) $this->Subscription['quantity_c']
+            : 0;
+        if ($ActiveUserCount !== null && $LicenseCount > 0 && $ActiveUserCount > $LicenseCount) {
+            $Overage = $ActiveUserCount - $LicenseCount;
+            $this->echoc(
+                "*** License exceeded: {$ActiveUserCount} active users, {$LicenseCount} licensed ({$Overage} over) ***\n",
+                'red'
+            );
+        }
+    }
+
+    private function displayStartupSummary() {
+        $this->echoc(str_pad("---<=== Sugar Utilities Summary ===>---", 116, ' ', STR_PAD_BOTH), 'brightblue');
+        echo PHP_EOL . PHP_EOL;
+        $this->displayInfo();
+        $this->displayWarnings();
+        $this->displayForkedCoreModuleStatus();
+        $this->StartupSummaryShown = true;
+    }
+
+    private function getActiveUserCount() {
+        if ($this->ActiveUserCount !== null) {
+            return $this->ActiveUserCount;
+        }
+        if (!$this->PDO instanceof PDO) {
+            return null;
+        }
+
+        try {
+            $Columns = $this->PDO->query('SHOW COLUMNS FROM users')->fetchAll(PDO::FETCH_COLUMN);
+            $Columns = array_map('strtolower', $Columns ?: array());
+            $Conditions = array("deleted = 0", "status = 'Active'");
+            if (in_array('portal_only', $Columns, true)) {
+                $Conditions[] = 'COALESCE(portal_only, 0) = 0';
+            }
+            if (in_array('is_group', $Columns, true)) {
+                $Conditions[] = 'COALESCE(is_group, 0) = 0';
+            }
+            $SQL = 'SELECT COUNT(*) FROM users WHERE ' . implode(' AND ', $Conditions);
+            $this->ActiveUserCount = (int) $this->PDO->query($SQL)->fetchColumn();
+            return $this->ActiveUserCount;
+        } catch (PDOException $Exception) {
+            return null;
+        }
+    }
+
+    private function displayForkedCoreModuleStatus() {
+        $ForkedModules = $this->findForkedCoreModuleFolders();
+        if ($ForkedModules === null) {
+            $this->echoc("Forked core module check could not be completed because a modules folder was not found.\n", 'yellow');
+            return;
+        }
+        if (!$ForkedModules) {
+            $this->echoc("Forked core module check: no matching module folders found.\n", 'green');
+            return;
+        }
+
+        $this->echoc(
+            '*** Forked core module folders detected (' . count($ForkedModules) . ") ***\n",
+            'red'
+        );
+        foreach ($ForkedModules as $Module) {
+            $this->echoc("    - {$Module}\n", 'red');
+        }
+    }
+
+    private function findForkedCoreModuleFolders() {
+        if ($this->ForkedCoreModules !== null) {
+            return $this->ForkedCoreModules;
+        }
+
+        $TemplateRoot = rtrim((string) ($this->InstanceInfo['TEMPLATE'] ?? ''), '/');
+        $ShadowRoot = rtrim((string) ($this->InstanceInfo['SHADOW'] ?? ''), '/');
+        $TemplateModules = $TemplateRoot . '/modules';
+        $ShadowModules = $ShadowRoot . '/modules';
+        if (!is_dir($TemplateModules) || !is_dir($ShadowModules)) {
+            return null;
+        }
+
+        $TemplateNames = $this->immediateDirectoryNames($TemplateModules);
+        $ShadowNames = $this->immediateDirectoryNames($ShadowModules);
+        $this->ForkedCoreModules = array_values(array_intersect($ShadowNames, $TemplateNames));
+        natcasesort($this->ForkedCoreModules);
+        $this->ForkedCoreModules = array_values($this->ForkedCoreModules);
+        return $this->ForkedCoreModules;
+    }
+
+    private function immediateDirectoryNames($Path) {
+        $Names = array();
+        foreach (scandir($Path) ?: array() as $Name) {
+            if ($Name === '.' || $Name === '..') {
+                continue;
+            }
+            if (is_dir($Path . DIRECTORY_SEPARATOR . $Name)) {
+                $Names[] = $Name;
+            }
+        }
+        return $Names;
     }
 
     private function initCommandRegistry() {
@@ -244,12 +354,15 @@ class sugarutils {
             if ($this->ShowMenu) {
                 $this->echoc(str_pad("---<=== Sugar Utilities ===>---", $TotalWidth, ' ', STR_PAD_BOTH), 'brightblue');
                 echo PHP_EOL . PHP_EOL;
-                $this->displayInfo();
                 $this->displayCommandMenu($LabelWidth, $CommandWidth, $TotalWidth);
                 $this->displayWarnings();
                 $Command = $this->ask("Enter Command: ");
             } else {
-                $this->displayWarnings();
+                if (!$this->StartupSummaryShown) {
+                    $this->displayStartupSummary();
+                } else {
+                    $this->displayWarnings();
+                }
                 $Command = $this->ask("Enter Command or press enter to display the menu: ");
             }
             $this->ShowMenu = true;
@@ -382,7 +495,16 @@ class sugarutils {
             return $Folder['Exists'];
         }));
 
-        $Report = array('#### Language Extension Assessment', '');
+        $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? 'Unknown Account');
+        $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? 'Unknown');
+        $Version = $this->singleLineValue($this->InstanceInfo['VERSION'] ?? 'Unknown');
+        $Created = $this->formatInstanceCreatedAt();
+        $Report = array(
+            '#### Language Extension Assessment for ' . $AccountName,
+            '',
+            "Instance: {$InstanceName}  Version: {$Version}  Created: {$Created}",
+            '',
+        );
         if (!$ExistingFolders) {
             $Report[] = 'The standard Sugar language extension folders were not found in this instance.';
         } elseif ($ExceedingFolders) {
@@ -608,6 +730,41 @@ class sugarutils {
 
     private function escapeMarkdownTableCell($Value) {
         return str_replace(array('|', "\r", "\n"), array('\\|', ' ', ' '), (string) $Value);
+    }
+
+    private function singleLineValue($Value) {
+        return trim(str_replace(array("\r", "\n"), ' ', (string) $Value));
+    }
+
+    private function formatInstanceCreatedAt() {
+        $Created = '';
+        foreach (array(
+            'CREATED',
+            'CREATED_AT',
+            'CREATE_DATE',
+            'CREATED_DATE',
+            'DATE_CREATED',
+            'CREATION_DATE',
+            'INSTALL_DATE',
+        ) as $Key) {
+            if (!empty($this->InstanceInfo[$Key])) {
+                $Created = trim((string) $this->InstanceInfo[$Key]);
+                break;
+            }
+        }
+        if ($Created === '') {
+            return 'Unknown';
+        }
+
+        try {
+            if (ctype_digit($Created)) {
+                return gmdate('Y-m-d H:i T', (int) $Created);
+            }
+            $Date = new DateTimeImmutable($Created, new DateTimeZone('UTC'));
+            return $Date->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i T');
+        } catch (Exception $Exception) {
+            return $this->singleLineValue($Created);
+        }
     }
     
     private function dbManageSpace() {
@@ -1325,7 +1482,21 @@ WHERE parent_id IS NOT NULL
     }
 
     private function whatsThis() {
-        $ExpectedFilesAndFolders = array('sugarutils', '.', '..', 'cache', 'custom', 'modules', 'config.php', 'config_override.php', 'upgrades', 'upload', 'portal2');
+        $ExpectedFilesAndFolders = array(
+            'sugarutils',
+            '.',
+            '..',
+            'cache',
+            'cloud_support',
+            'custom',
+            'modules',
+            'config.php',
+            'config_override.php',
+            'mothership_data_for_analytics.json',
+            'upgrades',
+            'upload',
+            'portal2',
+        );
         $FilesAndFolders = scandir('.');
         foreach ($FilesAndFolders as $File) {
             if (in_array($File, $ExpectedFilesAndFolders) || strtoupper(substr($File, -4)) === '.LOG') {
