@@ -47,6 +47,7 @@ class sugarutils {
     
     const DATE_CMU = 'Y-m-d H:i T';
     const DATE_CMU_SECONDS = 'Y-m-d H:i:s T';
+    const DEFAULT_LANG_EXT_FOLDER_MAX_SIZE_MB = 10.0;
 
     public function __construct() {
         umask(0077);
@@ -204,6 +205,7 @@ class sugarutils {
 
             'scu' => array('label' => 'Sugar Checkup', 'method' => 'runSugarCheckup', 'section' => 'Maintenance / Repairs'),
             'hc' => array('label' => 'Health Check', 'method' => 'runHealthCheck', 'section' => 'Maintenance / Repairs'),
+            'lea' => array('label' => 'Language Extension Assessment', 'method' => 'assessLanguageExtensions', 'section' => 'Maintenance / Repairs'),
             'qrr' => array('label' => 'Quick Repair and Rebuild', 'method' => 'runQuickRepairandRebuild', 'section' => 'Maintenance / Repairs'),
             'rdis' => array('label' => 'Run Data Integrity Scripts', 'method' => 'runDataIntegrityScripts', 'section' => 'Maintenance / Repairs'),
             'pm' => array('label' => 'Parse Manifest', 'method' => 'parseManifest', 'section' => 'Maintenance / Repairs'),
@@ -356,6 +358,256 @@ class sugarutils {
         
         $this->whatsThis();
         $this->ShowMenu = false;
+    }
+
+    private function assessLanguageExtensions() {
+        $ThresholdConfigured = array_key_exists('lang_ext_folder_max_size_mb', $this->SugarConfig);
+        $ThresholdMiB = $ThresholdConfigured
+            ? (float) $this->SugarConfig['lang_ext_folder_max_size_mb']
+            : self::DEFAULT_LANG_EXT_FOLDER_MAX_SIZE_MB;
+        if ($ThresholdMiB <= 0) {
+            $ThresholdMiB = self::DEFAULT_LANG_EXT_FOLDER_MAX_SIZE_MB;
+            $ThresholdConfigured = false;
+        }
+
+        $Folders = array(
+            $this->analyzeLanguageExtensionFolder('custom/Extension/application/Ext/Language'),
+            $this->analyzeLanguageExtensionFolder('custom/application/Ext/Language'),
+        );
+        $CompiledDefinitions = $this->analyzeCompiledLanguageDefinitions('custom/application/Ext/Language');
+        $ExceedingFolders = array_values(array_filter($Folders, function ($Folder) use ($ThresholdMiB) {
+            return $Folder['Exists'] && $Folder['LogicalMiB'] > $ThresholdMiB;
+        }));
+        $ExistingFolders = array_values(array_filter($Folders, function ($Folder) {
+            return $Folder['Exists'];
+        }));
+
+        $Report = array('#### Language Extension Assessment', '');
+        if (!$ExistingFolders) {
+            $Report[] = 'The standard Sugar language extension folders were not found in this instance.';
+        } elseif ($ExceedingFolders) {
+            $FolderCount = count($ExceedingFolders);
+            $FolderWord = $FolderCount === 1 ? 'folder exceeds' : 'folders exceed';
+            $Report[] = "The Sugar Health Check is expected to report this instance because {$FolderCount} language extension {$FolderWord} the "
+                . number_format($ThresholdMiB, 2) . ' MiB size limit. The measurements below use logical file size, which is the value evaluated by the Health Check.';
+        } else {
+            $Report[] = 'The measured language extension folders are within the Sugar Health Check limit of '
+                . number_format($ThresholdMiB, 2) . ' MiB. The measurements below use logical file size, which is the value evaluated by the Health Check.';
+        }
+
+        if ($CompiledDefinitions['ExtraDefinitions'] > 0) {
+            $Report[] = 'The compiled language files contain '
+                . number_format($CompiledDefinitions['ExtraDefinitions'])
+                . ' additional list definitions beyond the first definition in the same language, affecting '
+                . number_format($CompiledDefinitions['RepeatedPairs'])
+                . ' language/list combinations. The highest observed count is '
+                . number_format($CompiledDefinitions['MaximumDefinitions'])
+                . ' definitions of one list in one language. This is consistent with accumulated duplicate or overriding language customizations and warrants cleanup with supported tooling.';
+        } elseif ($CompiledDefinitions['Exists']) {
+            $Report[] = 'No list name was defined more than once within the same compiled language file.';
+        }
+
+        $Report[] = '';
+        $Report[] = '| Folder | Logical Size | Allocated File Space | Files | Languages | Health Check |';
+        $Report[] = '| --- | ---: | ---: | ---: | ---: | --- |';
+        foreach ($Folders as $Folder) {
+            if (!$Folder['Exists']) {
+                $Report[] = '| `' . $this->escapeMarkdownTableCell($Folder['Path']) . '` | Not found | - | - | - | Not evaluated |';
+                continue;
+            }
+            $Status = $Folder['LogicalMiB'] > $ThresholdMiB
+                ? 'Exceeds limit by ' . number_format($Folder['LogicalMiB'] - $ThresholdMiB, 2) . ' MiB'
+                : 'Within limit';
+            $Report[] = '| `' . $this->escapeMarkdownTableCell($Folder['Path']) . '` | '
+                . number_format($Folder['LogicalMiB'], 2) . ' MiB | '
+                . number_format($Folder['AllocatedMiB'], 2) . ' MiB | '
+                . number_format($Folder['Files']) . ' | '
+                . number_format($Folder['Languages']) . ' | '
+                . $Status . ' |';
+        }
+
+        $SourceFolder = $Folders[0];
+        if ($SourceFolder['Exists'] && $SourceFolder['Languages'] > 0) {
+            $FilesPerLanguage = $SourceFolder['Files'] / $SourceFolder['Languages'];
+            $Report[] = '';
+            $Report[] = 'The source extension folder averages '
+                . number_format($FilesPerLanguage, 1)
+                . ' files per language. Allocated file space may be substantially larger than logical size when the folder contains thousands of small files; the Health Check uses logical size.';
+        }
+
+        if ($CompiledDefinitions['Exists']) {
+            $Report[] = '';
+            $Report[] = '##### Compiled Language Definitions';
+            $Report[] = '';
+            $Report[] = '- Compiled files analyzed: ' . number_format($CompiledDefinitions['Files']);
+            $Report[] = '- Compiled lines analyzed: ' . number_format($CompiledDefinitions['Lines']);
+            $Report[] = '- Total list assignments: ' . number_format($CompiledDefinitions['Assignments']);
+            $Report[] = '- Language/list combinations defined more than once: ' . number_format($CompiledDefinitions['RepeatedPairs']);
+            $Report[] = '- Additional definitions beyond the first: ' . number_format($CompiledDefinitions['ExtraDefinitions']);
+
+            if ($CompiledDefinitions['TopRepeated']) {
+                $Report[] = '';
+                $Report[] = '| Language | List | Definitions | Additional Definitions |';
+                $Report[] = '| --- | --- | ---: | ---: |';
+                foreach ($CompiledDefinitions['TopRepeated'] as $Repeated) {
+                    $Report[] = '| ' . $this->escapeMarkdownTableCell($Repeated['Language'])
+                        . ' | `' . $this->escapeMarkdownTableCell($Repeated['List']) . '` | '
+                        . number_format($Repeated['Count']) . ' | '
+                        . number_format($Repeated['Count'] - 1) . ' |';
+                }
+            }
+        }
+
+        $Report[] = '';
+        if ($CompiledDefinitions['ExtraDefinitions'] > 0) {
+            $Report[] = '**Assessment note:** Repeated assignments are evidence of duplication or overrides, but not proof that every assigned array is identical. Sugar uses the final effective definition, so files should not be removed blindly. Preserve the current effective values and use the Sugar-provided cleanup utility when available.';
+        } else {
+            $Report[] = '**Assessment note:** Language definitions may intentionally override earlier values. Preserve the current effective values and use supported cleanup tooling rather than removing files blindly.';
+        }
+        $Report[] = '';
+        $Report[] = '_Health Check threshold: ' . number_format($ThresholdMiB, 2) . ' MiB ('
+            . ($ThresholdConfigured ? 'configured in this instance' : 'default value') . ')._';
+
+        echo implode(PHP_EOL, $Report) . PHP_EOL;
+        $this->ShowMenu = false;
+    }
+
+    private function analyzeLanguageExtensionFolder($Path) {
+        $Result = array(
+            'Path' => $Path,
+            'Exists' => is_dir($Path),
+            'Files' => 0,
+            'Languages' => 0,
+            'LogicalMiB' => 0.0,
+            'AllocatedMiB' => 0.0,
+        );
+        if (!$Result['Exists']) {
+            return $Result;
+        }
+
+        $LogicalBytes = 0;
+        $AllocatedBytes = 0;
+        $Languages = array();
+        try {
+            $Files = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($Path, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($Files as $File) {
+                if (!$File->isFile()) {
+                    continue;
+                }
+                $Result['Files']++;
+                $LogicalBytes += $File->getSize();
+                $Stats = @stat($File->getPathname());
+                if (is_array($Stats) && isset($Stats['blocks'])) {
+                    $AllocatedBytes += ((int) $Stats['blocks']) * 512;
+                }
+                if (preg_match('/^([a-z]{2}_[A-Za-z]{2})/', $File->getBasename(), $Matches)) {
+                    $Languages[strtolower($Matches[1])] = true;
+                }
+            }
+        } catch (UnexpectedValueException $Exception) {
+            $Result['Error'] = $Exception->getMessage();
+        }
+
+        $Result['Languages'] = count($Languages);
+        $Result['LogicalMiB'] = $LogicalBytes / 1048576;
+        $Result['AllocatedMiB'] = $AllocatedBytes / 1048576;
+        return $Result;
+    }
+
+    private function analyzeCompiledLanguageDefinitions($Path) {
+        $Result = array(
+            'Exists' => is_dir($Path),
+            'Files' => 0,
+            'Lines' => 0,
+            'Assignments' => 0,
+            'RepeatedPairs' => 0,
+            'ExtraDefinitions' => 0,
+            'MaximumDefinitions' => 0,
+            'TopRepeated' => array(),
+        );
+        if (!$Result['Exists']) {
+            return $Result;
+        }
+
+        $DefinitionCounts = array();
+        try {
+            $Files = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($Path, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($Files as $File) {
+                if (!$File->isFile() || strtolower($File->getExtension()) !== 'php') {
+                    continue;
+                }
+                $Result['Files']++;
+                $FilePath = $File->getPathname();
+                $Handle = @fopen($FilePath, 'r');
+                if (!$Handle) {
+                    continue;
+                }
+                while (($Line = fgets($Handle)) !== false) {
+                    $Result['Lines']++;
+                    if (!preg_match_all(
+                        '/\\$app_list_strings\\s*\\[\\s*([\'\"])([^\'\"]+)\\1\\s*\\]\\s*=/',
+                        $Line,
+                        $Matches,
+                        PREG_SET_ORDER
+                    )) {
+                        continue;
+                    }
+                    foreach ($Matches as $Match) {
+                        $Result['Assignments']++;
+                        $Key = $FilePath . "\0" . $Match[2];
+                        if (!isset($DefinitionCounts[$Key])) {
+                            $DefinitionCounts[$Key] = array(
+                                'File' => $FilePath,
+                                'Language' => $this->languageCodeFromFilename($File->getBasename()),
+                                'List' => $Match[2],
+                                'Count' => 0,
+                            );
+                        }
+                        $DefinitionCounts[$Key]['Count']++;
+                    }
+                }
+                fclose($Handle);
+            }
+        } catch (UnexpectedValueException $Exception) {
+            $Result['Error'] = $Exception->getMessage();
+        }
+
+        $Repeated = array();
+        foreach ($DefinitionCounts as $Definition) {
+            $Result['MaximumDefinitions'] = max($Result['MaximumDefinitions'], $Definition['Count']);
+            if ($Definition['Count'] <= 1) {
+                continue;
+            }
+            $Result['RepeatedPairs']++;
+            $Result['ExtraDefinitions'] += $Definition['Count'] - 1;
+            $Repeated[] = $Definition;
+        }
+        usort($Repeated, function ($Left, $Right) {
+            if ($Left['Count'] === $Right['Count']) {
+                $LanguageComparison = strcmp($Left['Language'], $Right['Language']);
+                return $LanguageComparison !== 0
+                    ? $LanguageComparison
+                    : strcmp($Left['List'], $Right['List']);
+            }
+            return $Right['Count'] <=> $Left['Count'];
+        });
+        $Result['TopRepeated'] = array_slice($Repeated, 0, 15);
+        return $Result;
+    }
+
+    private function languageCodeFromFilename($Filename) {
+        if (preg_match('/^([a-z]{2}_[A-Za-z]{2})/', $Filename, $Matches)) {
+            return $Matches[1];
+        }
+        return $Filename;
+    }
+
+    private function escapeMarkdownTableCell($Value) {
+        return str_replace(array('|', "\r", "\n"), array('\\|', ' ', ' '), (string) $Value);
     }
     
     private function dbManageSpace() {
