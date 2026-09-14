@@ -495,6 +495,18 @@ class sugarutils {
         $ExistingFolders = array_values(array_filter($Folders, function ($Folder) {
             return $Folder['Exists'];
         }));
+        $LargestFolderMiB = 0.0;
+        foreach ($ExistingFolders as $Folder) {
+            $LargestFolderMiB = max($LargestFolderMiB, $Folder['LogicalMiB']);
+        }
+        $SuggestedThresholdMiB = $ThresholdMiB;
+        $CanSuggestThreshold = $CompiledDefinitions['ExtraDefinitions'] === 0 && $LargestFolderMiB > 0;
+        if ($CanSuggestThreshold) {
+            $SuggestedThresholdMiB = max(
+                $ThresholdMiB,
+                ceil(($LargestFolderMiB * 1.5) / 5) * 5
+            );
+        }
 
         $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? 'Unknown Account');
         $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? 'Unknown');
@@ -588,11 +600,36 @@ class sugarutils {
             $Report[] = '**Assessment note:** Language definitions may intentionally override earlier values. Preserve the current effective values and use supported cleanup tooling rather than removing files blindly.';
         }
         $Report[] = '';
-        $Report[] = '_Health Check threshold: ' . number_format($ThresholdMiB, 2) . ' MiB ('
+        $Report[] = '##### Health Check Configuration';
+        $Report[] = '';
+        if ($SuggestedThresholdMiB > $ThresholdMiB) {
+            $Report[] = 'No duplicate compiled definitions remain. A threshold of '
+                . number_format($SuggestedThresholdMiB, 0)
+                . ' MiB provides approximately 50% headroom above the largest measured folder and is rounded up to the next 5 MiB.';
+        } elseif (!$CanSuggestThreshold && $CompiledDefinitions['ExtraDefinitions'] > 0) {
+            $Report[] = 'Clean up the duplicate definitions before increasing the Health Check threshold. The current effective setting is shown below.';
+        } else {
+            $Report[] = 'The current effective Health Check setting is shown below.';
+        }
+        $Report[] = '';
+        $Report[] = '```php';
+        $Report[] = "\$sugar_config['lang_ext_folder_max_size_mb'] = "
+            . $this->formatConfigurationNumber($SuggestedThresholdMiB) . ';';
+        $Report[] = '```';
+        $Report[] = '';
+        $Report[] = '_Current Health Check threshold: ' . number_format($ThresholdMiB, 2) . ' MiB ('
             . ($ThresholdConfigured ? 'configured in this instance' : 'default value') . ')._';
 
         echo implode(PHP_EOL, $Report) . PHP_EOL;
         $this->ShowMenu = false;
+    }
+
+    private function formatConfigurationNumber($Value) {
+        $Rounded = round((float) $Value, 2);
+        if ($Rounded === floor($Rounded)) {
+            return number_format($Rounded, 0, '.', '');
+        }
+        return rtrim(rtrim(number_format($Rounded, 2, '.', ''), '0'), '.');
     }
 
     private function analyzeLanguageExtensionFolder($Path) {
