@@ -210,7 +210,33 @@ class sugarutils {
         $this->displayInfo();
         $this->displayWarnings();
         $this->displayForkedCoreModuleStatus();
+        $this->displayGitDirectoryStatus();
         $this->StartupSummaryShown = true;
+    }
+
+    private function displayGitDirectoryStatus() {
+        $Root = realpath($this->InstanceInfo['SHADOW'] ?? getcwd());
+        if ($Root === false || !is_dir($Root) || $Root === DIRECTORY_SEPARATOR) {
+            $this->echoc("Git directory check could not be completed: instance directory unavailable.\n", 'yellow');
+            return;
+        }
+        $Directories = [];
+        $Command = 'find -P ' . escapeshellarg($Root) . " -type d -name '.git' -prune -print";
+        exec($Command, $Directories, $ExitCode);
+        sort($Directories, SORT_STRING);
+        if ($Directories) {
+            $this->echoc('*** Git metadata directories detected (' . count($Directories) . ") ***\n", 'yellow');
+            foreach ($Directories as $Directory) {
+                $RelativePath = substr($Directory, strlen($Root) + 1);
+                $this->echoc("    - {$RelativePath}\n", 'yellow');
+            }
+            $this->echoc("Git metadata is not application code. No directories were removed.\n", 'yellow');
+        } elseif ($ExitCode === 0) {
+            $this->echoc("Git directory check: no .git directories found.\n", 'green');
+        }
+        if ($ExitCode !== 0) {
+            $this->echoc("Git directory check was incomplete; some paths could not be scanned.\n", 'yellow');
+        }
     }
 
     private function getActiveUserCount() {
