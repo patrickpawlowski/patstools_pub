@@ -510,10 +510,9 @@ class sugarutils {
             $ThresholdConfigured = false;
         }
 
-        $Folders = array(
-            $this->analyzeLanguageExtensionFolder('custom/Extension/application/Ext/Language'),
-            $this->analyzeLanguageExtensionFolder('custom/application/Ext/Language'),
-        );
+        $DiscoveryError = '';
+        $Paths = $this->languageExtensionFolderPaths($DiscoveryError);
+        $Folders = array_map(array($this, 'analyzeLanguageExtensionFolder'), $Paths);
         $CompiledDefinitions = $this->analyzeCompiledLanguageDefinitions('custom/application/Ext/Language');
         $ExceedingFolders = array_values(array_filter($Folders, function ($Folder) use ($ThresholdMiB) {
             return $Folder['Exists'] && $Folder['LogicalMiB'] > $ThresholdMiB;
@@ -525,14 +524,7 @@ class sugarutils {
         foreach ($ExistingFolders as $Folder) {
             $LargestFolderMiB = max($LargestFolderMiB, $Folder['LogicalMiB']);
         }
-        $SuggestedThresholdMiB = $ThresholdMiB;
-        $CanSuggestThreshold = $CompiledDefinitions['ExtraDefinitions'] === 0 && $LargestFolderMiB > 0;
-        if ($CanSuggestThreshold) {
-            $SuggestedThresholdMiB = max(
-                $ThresholdMiB,
-                ceil(($LargestFolderMiB * 1.5) / 5) * 5
-            );
-        }
+        $SuggestedThresholdMiB = $this->recommendedLanguageThreshold($LargestFolderMiB, $ThresholdMiB);
 
         $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? 'Unknown Account');
         $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? 'Unknown');
@@ -552,8 +544,18 @@ class sugarutils {
             $Report[] = "The Sugar Health Check is expected to report this instance because {$FolderCount} language extension {$FolderWord} the "
                 . number_format($ThresholdMiB, 2) . ' MiB size limit. The measurements below use logical file size, which is the value evaluated by the Health Check.';
         } else {
-            $Report[] = 'The measured language extension folders are within the Sugar Health Check limit of '
+            $Report[] = 'According to this assessment, the measured language extension folders are within the configured threshold of '
                 . number_format($ThresholdMiB, 2) . ' MiB. The measurements below use logical file size, which is the value evaluated by the Health Check.';
+        }
+
+        if ($DiscoveryError !== '') {
+            $Report[] = '**Warning:** Folder discovery was incomplete: ' . $this->singleLineValue($DiscoveryError);
+        }
+        foreach ($Folders as $Folder) {
+            if (!empty($Folder['Error'])) {
+                $Report[] = '**Warning:** Measurement was incomplete for `' . $Folder['Path'] . '`: '
+                    . $this->singleLineValue($Folder['Error']);
+            }
         }
 
         if ($CompiledDefinitions['ExtraDefinitions'] > 0) {
@@ -628,26 +630,62 @@ class sugarutils {
         $Report[] = '';
         $Report[] = '##### Health Check Configuration';
         $Report[] = '';
-        if ($SuggestedThresholdMiB > $ThresholdMiB) {
-            $Report[] = 'No duplicate compiled definitions remain. A threshold of '
-                . number_format($SuggestedThresholdMiB, 0)
-                . ' MiB provides approximately 50% headroom above the largest measured folder and is rounded up to the next 5 MiB.';
-        } elseif (!$CanSuggestThreshold && $CompiledDefinitions['ExtraDefinitions'] > 0) {
-            $Report[] = 'Clean up the duplicate definitions before increasing the Health Check threshold. The current effective setting is shown below.';
-        } else {
-            $Report[] = 'The current effective Health Check setting is shown below.';
-        }
+        $Report[] = '**Current**';
+        $Report[] = '';
+        $Report[] = '```php';
+        $Report[] = "\$sugar_config['lang_ext_folder_max_size_mb'] = "
+            . $this->formatConfigurationNumber($ThresholdMiB) . ';';
+        $Report[] = '```';
+        $Report[] = '';
+        $Report[] = '**Recommended**';
         $Report[] = '';
         $Report[] = '```php';
         $Report[] = "\$sugar_config['lang_ext_folder_max_size_mb'] = "
             . $this->formatConfigurationNumber($SuggestedThresholdMiB) . ';';
         $Report[] = '```';
         $Report[] = '';
+        $Report[] = 'Based on the largest measured folder, with 10% headroom, rounded up to the next 5 MiB. '
+            . 'An existing higher setting is retained. Rerun the Health Check to verify.';
+        if ($CompiledDefinitions['ExtraDefinitions'] > 0) {
+            $Report[] = 'The threshold recommendation does not resolve duplicate definitions. Review them separately using supported cleanup tooling.';
+        }
         $Report[] = '_Current Health Check threshold: ' . number_format($ThresholdMiB, 2) . ' MiB ('
             . ($ThresholdConfigured ? 'configured in this instance' : 'default value') . ')._';
 
         echo implode(PHP_EOL, $Report) . PHP_EOL;
         $this->ShowMenu = false;
+    }
+
+    private function recommendedLanguageThreshold($LargestMiB, $CurrentMiB) {
+        return max($CurrentMiB, ceil(($LargestMiB * 1.10) / 5) * 5);
+    }
+
+    private function languageExtensionFolderPaths(&$Error) {
+        $Paths = array(
+            'custom/Extension/application/Ext/Language',
+            'custom/application/Ext/Language',
+        );
+        $Error = '';
+        if (!is_dir('custom')) {
+            return $Paths;
+        }
+        try {
+            $Entries = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator('custom', FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($Entries as $Entry) {
+                if (!$Entry->isFile() || strtolower($Entry->getExtension()) !== 'php') {
+                    continue;
+                }
+                $Directory = str_replace(DIRECTORY_SEPARATOR, '/', $Entry->getPath());
+                if (substr($Directory, -13) === '/Ext/Language') {
+                    $Paths[] = $Directory;
+                }
+            }
+        } catch (UnexpectedValueException $Exception) {
+            $Error = $Exception->getMessage();
+        }
+        return array_values(array_unique($Paths));
     }
 
     private function formatConfigurationNumber($Value) {
