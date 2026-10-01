@@ -17,6 +17,7 @@ eval('class LanguageAssessmentHarness {
     public $Subscription = [];
     public $InstanceInfo = [];
     public $ShowMenu = true;
+    public function echoc($text, $color) { echo $text; }
     public function recommend($size, $current) { return $this->recommendedLanguageThreshold($size, $current); }
     public function paths(&$error) { return $this->languageExtensionFolderPaths($error); }
     public function report() { ob_start(); $this->assessLanguageExtensions(); return ob_get_clean(); }
@@ -54,6 +55,7 @@ try {
     check($error === '', 'Unexpected discovery error');
     $scan->SugarConfig = ['lang_ext_folder_max_size_mb' => 20];
     $report = $scan->report();
+    check(str_starts_with($report, "Checking the size of language files . . .\n"), 'Missing assessment progress message');
     check(str_contains($report, '**Current**'), 'Missing current label');
     check(str_contains($report, '**Recommended**'), 'Missing recommended label');
     check(str_contains($report, "= 20;"), 'Current value missing');

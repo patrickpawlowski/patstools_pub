@@ -215,6 +215,7 @@ class sugarutils {
     }
 
     private function displayGitDirectoryStatus() {
+        $this->echoc("Checking for .git directories . . .\n", 'label');
         $Root = realpath($this->InstanceInfo['SHADOW'] ?? getcwd());
         if ($Root === false || !is_dir($Root) || $Root === DIRECTORY_SEPARATOR) {
             $this->echoc("Git directory check could not be completed: instance directory unavailable.\n", 'yellow');
@@ -501,6 +502,7 @@ class sugarutils {
     }
 
     private function assessLanguageExtensions() {
+        $this->echoc("Checking the size of language files . . .\n", 'label');
         $ThresholdConfigured = array_key_exists('lang_ext_folder_max_size_mb', $this->SugarConfig);
         $ThresholdMiB = $ThresholdConfigured
             ? (float) $this->SugarConfig['lang_ext_folder_max_size_mb']

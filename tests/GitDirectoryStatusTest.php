@@ -25,6 +25,7 @@ try {
     $scan = new GitDirectoryStatusHarness();
     $scan->InstanceInfo['SHADOW'] = $instance;
     $scan->run();
+    check(str_starts_with($scan->output, "Checking for .git directories . . .\n"), 'Missing scan progress message.');
     check(strpos($scan->output, 'no .git directories found') !== false, 'Clean scan failed.');
     foreach (['/.git', '/custom/.git', '/modules/example/.git', '/custom/.github'] as $path) {
         mkdir($instance . $path, 0777, true);
