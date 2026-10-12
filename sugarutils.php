@@ -456,10 +456,16 @@ class sugarutils {
             return;
         }
         $Reflection = new ReflectionMethod($this, $Method);
-        if ($Reflection->getNumberOfParameters() > 0) {
-            $this->$Method($Command);
-        } else {
-            $this->$Method();
+        try {
+            if ($Reflection->getNumberOfParameters() > 0) {
+                $this->$Method($Command);
+            } else {
+                $this->$Method();
+            }
+        } catch (Throwable $Exception) {
+            if ($Option !== 'dus') throw $Exception;
+            $this->echoc("Data usage snapshot failed: " . $Exception->getMessage() . "\n", 'bad');
+            utils::pressEnterToContinue();
         }
     }
 
@@ -1031,11 +1037,16 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
             return;
         }
 
-        file_put_contents($OutputPath, $JSON . PHP_EOL);
+        if (file_put_contents($OutputPath, $JSON . PHP_EOL) !== strlen($JSON . PHP_EOL)) {
+            $this->echoc("Failed to write the complete data usage snapshot: {$OutputPath}\n", 'bad');
+            utils::pressEnterToContinue();
+            return;
+        }
         $this->echoc("Data usage snapshot created:\n", 'label');
         $this->echoc($OutputPath . "\n", 'good');
         $this->echoc("Upload path scanned: {$UploadPath}\n", 'data');
-        utils::pressEnterToContinue();
+        $this->echoc("Leaving sugarutils; returning to the shell.\n", 'brightmagenta');
+        exit(0);
     }
 
     private function getLicenseConfigRows(): array {
