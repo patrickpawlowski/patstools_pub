@@ -45,6 +45,7 @@ class sugarutils {
     private $ShowMenu = false;
     private $StartupSummaryShown = false;
     private $ActiveUserCount = null;
+    private $ActiveAdminCount = null;
     private $ForkedCoreModules = null;
     private $Commands = array();
     
@@ -197,8 +198,11 @@ class sugarutils {
             : 0;
         if ($ActiveUserCount !== null && $LicenseCount > 0 && $ActiveUserCount > $LicenseCount) {
             $Overage = $ActiveUserCount - $LicenseCount;
+            $Breakdown = $this->ActiveAdminCount !== null
+                ? ' (' . $this->ActiveAdminCount . ' admin, ' . ($ActiveUserCount - $this->ActiveAdminCount) . ' non-admin)'
+                : ' (admin/non-admin breakdown unavailable)';
             $this->echoc(
-                "*** License exceeded: {$ActiveUserCount} active users, {$LicenseCount} licensed ({$Overage} over) ***\n",
+                "*** License exceeded: {$ActiveUserCount} active users{$Breakdown}, {$LicenseCount} licensed ({$Overage} over) ***\n",
                 'red'
             );
         }
@@ -215,15 +219,39 @@ class sugarutils {
     }
 
     private function displayGitDirectoryStatus() {
-        $this->echoc("Checking for .git directories . . .\n", 'label');
         $Root = realpath($this->InstanceInfo['SHADOW'] ?? getcwd());
         if ($Root === false || !is_dir($Root) || $Root === DIRECTORY_SEPARATOR) {
             $this->echoc("Git directory check could not be completed: instance directory unavailable.\n", 'yellow');
             return;
         }
+        $LogPath = 'cloud_support/git_directory_scan.json';
+        $Cached = is_file($LogPath) ? json_decode((string) file_get_contents($LogPath), true) : null;
+        $UseCache = is_array($Cached)
+            && ($Cached['Root'] ?? null) === $Root
+            && ($Cached['CompletedAt'] ?? 0) > time() - 30 * 86400
+            && ($Cached['CompletedAt'] ?? PHP_INT_MAX) <= time()
+            && isset($Cached['Directories']) && is_array($Cached['Directories'])
+            && count(array_filter($Cached['Directories'], 'is_string')) === count($Cached['Directories']);
         $Directories = [];
-        $Command = 'find -P ' . escapeshellarg($Root) . " -type d -name '.git' -prune -print";
-        exec($Command, $Directories, $ExitCode);
+        if ($UseCache) {
+            $Directories = $Cached['Directories'];
+            $ExitCode = 0;
+            $this->echoc('Git directory check: using completed scan from ' . date('Y-m-d H:i:s T', $Cached['CompletedAt']) . ".\n", 'label');
+            $this->echoc("Delete {$LogPath} to force a new scan.\n", 'label');
+        } else {
+            $this->echoc("Checking for .git directories . . .\n", 'label');
+            $Command = 'find -P ' . escapeshellarg($Root) . " -type d -name '.git' -prune -print";
+            exec($Command, $Directories, $ExitCode);
+            if ($ExitCode === 0) {
+                $this->ensureCloudSupportFolder();
+                $Log = json_encode(['Root' => $Root, 'CompletedAt' => time(), 'Directories' => $Directories], JSON_PRETTY_PRINT);
+                if ($Log === false || file_put_contents($LogPath, $Log . PHP_EOL, LOCK_EX) === false) {
+                    $this->echoc("Could not save completed Git scan; the next invocation will scan again.\n", 'yellow');
+                } else {
+                    chmod($LogPath, 0600);
+                }
+            }
+        }
         sort($Directories, SORT_STRING);
         if ($Directories) {
             $this->echoc('*** Git metadata directories detected (' . count($Directories) . ") ***\n", 'yellow');
@@ -258,8 +286,12 @@ class sugarutils {
             if (in_array('is_group', $Columns, true)) {
                 $Conditions[] = 'COALESCE(is_group, 0) = 0';
             }
-            $SQL = 'SELECT COUNT(*) FROM users WHERE ' . implode(' AND ', $Conditions);
-            $this->ActiveUserCount = (int) $this->PDO->query($SQL)->fetchColumn();
+            $AdminExpression = in_array('is_admin', $Columns, true)
+                ? 'COALESCE(SUM(CASE WHEN is_admin = 1 THEN 1 ELSE 0 END), 0)' : 'NULL';
+            $SQL = 'SELECT COUNT(*) AS ActiveUsers, ' . $AdminExpression . ' AS AdminUsers FROM users WHERE ' . implode(' AND ', $Conditions);
+            $Counts = $this->PDO->query($SQL)->fetch(PDO::FETCH_ASSOC);
+            $this->ActiveUserCount = (int) $Counts['ActiveUsers'];
+            $this->ActiveAdminCount = $Counts['AdminUsers'] !== null ? (int) $Counts['AdminUsers'] : null;
             return $this->ActiveUserCount;
         } catch (PDOException $Exception) {
             return null;
