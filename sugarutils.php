@@ -878,8 +878,33 @@ class sugarutils {
         return trim(str_replace(array("\r", "\n"), ' ', (string) $Value));
     }
     
+    private function databaseMarkdownTable($Rows) {
+        if (empty($Rows)) {
+            return "\n_No matching rows._\n\n";
+        }
+        $Headers = array_keys($Rows[0]);
+        $Escape = static function ($Value) {
+            if ($Value === null) return 'NULL';
+            $Value = htmlspecialchars((string) $Value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            return str_replace(array('\\', '|', '`', '*', '_', "\r\n", "\r", "\n"),
+                array('&#92;', '&#124;', '&#96;', '&#42;', '&#95;', '<br>', '<br>', '<br>'), $Value);
+        };
+        $Lines = array('| ' . implode(' | ', array_map($Escape, $Headers)) . ' |',
+            '| ' . implode(' | ', array_fill(0, count($Headers), '---')) . ' |');
+        foreach ($Rows as $Row) {
+            $Cells = array();
+            foreach ($Headers as $Header) $Cells[] = $Escape($Row[$Header] ?? null);
+            $Lines[] = '| ' . implode(' | ', $Cells) . ' |';
+        }
+        return "\n" . implode("\n", $Lines) . "\n\n";
+    }
+
     private function dbManageSpace() {
         $this->echoc("{$this->InstanceInfo['INSTANCE']}_database_analysis.md\n\n", 'data');
+        $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? '') ?: 'Unknown Account';
+        $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? '') ?: 'Unknown';
+        $Version = $this->singleLineValue($this->InstanceInfo['VERSION'] ?? '') ?: 'Unknown';
+        $this->echoc("Account Name: {$AccountName}  \nInstance: {$InstanceName}  \nVersion: {$Version}\n", 'data');
         $this->echoc("\n#### Entire Database\n", 'label');
         $this->echoc("Shows the total size of the database by summing all tables, giving a high-level view of overall storage usage.\n", 'data');
         $SQL = "SELECT 
@@ -887,11 +912,9 @@ class sugarutils {
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         $DatabaseSize = $Rows[0]['Database Size in GB'];
         
         $this->echoc("\n#### Large Tables\n", 'label');
@@ -904,18 +927,14 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND round(((data_length + index_length) / 1024 / 1024 / 1024), 2) > .9
-ORDER BY (data_length + index_length) DESC;
- 
-WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
+ORDER BY (data_length + index_length) DESC;";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         $this->echoc("\n#### Audit Tables\n", 'label');
-        $this->echoc("Audit tables store the history of field changes for records; this section shows how much space all *_audit tables collectively use and whether any are excessively large.", 'dta');
+        $this->echoc("Audit tables store the history of field changes for records; this section shows how much space all *_audit tables collectively use and whether any are excessively large.\n", 'data');
         $SQL = "SELECT 
      round((SUM(data_length + index_length) / 1024 / 1024 / 1024), 4) `Size in GB`,
      round(((SUM(data_length + index_length) / 1024 / 1024 / 1024) / {$DatabaseSize}) * 100, 2) `Percentage`
@@ -923,11 +942,9 @@ FROM information_schema.TABLES
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME LIKE '%_audit';";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         
         $SQL = "SELECT 
@@ -939,14 +956,11 @@ FROM information_schema.TABLES
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND TABLE_NAME LIKE '%_audit'
     AND round(((data_length + index_length) / 1024 / 1024 / 1024), 2) > .9
-ORDER BY (data_length + index_length) DESC; 
-WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
+ORDER BY (data_length + index_length) DESC;";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         
         $this->echoc("\n#### Activity Stream Tables\n", 'label');
@@ -958,11 +972,9 @@ FROM information_schema.TABLES
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME IN ('activities','activities_users','subscriptions');";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         
         $SQL = "SELECT 
@@ -973,14 +985,11 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND TABLE_NAME IN ('activities','activities_users','subscriptions')
-ORDER BY (data_length + index_length) DESC;
-WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
+ORDER BY (data_length + index_length) DESC;";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         $this->echoc("\n#### Other Usual Suspects\n", 'label');
         $this->echoc("Reports the size of common high-growth operational tables (job queue, workflow logs, audit events, email bodies) that often impact performance or storage, showing whether any of them are contributing significantly to database size.\n", 'data');
@@ -991,11 +1000,9 @@ FROM information_schema.TABLES
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
      AND TABLE_NAME IN ('job_queue','audit_events','pmse_bpm_flow','emails_text');";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         
         $SQL = "SELECT 
@@ -1006,14 +1013,11 @@ WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
 FROM information_schema.TABLES 
 WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}'
     AND TABLE_NAME IN ('job_queue','audit_events','pmse_bpm_flow','emails_text')
-ORDER BY (data_length + index_length) DESC;
-WHERE table_schema = '{$this->SugarConfig['dbconfig']['db_name']}';";
+ORDER BY (data_length + index_length) DESC;";
         $this->echoc("```sql\n{$SQL}\n```" . PHP_EOL, 'command');
-        $this->echoc("```\n", 'label');
         $Result = $this->PDO->query($SQL);
         $Rows = $Result->fetchAll(PDO::FETCH_ASSOC);
-        utils::print_t($Rows);
-        $this->echoc("```\n", 'label');
+        $this->echoc($this->databaseMarkdownTable($Rows), 'data');
         
         
         
