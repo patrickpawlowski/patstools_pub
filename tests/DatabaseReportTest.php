@@ -41,7 +41,7 @@ $report->PDO = new DatabaseReportPDO();
 $report->run();
 check(str_starts_with($report->output, "case123.sugarondemand.com_database_analysis.md\n\nAccount Name: Example Account  \nInstance: case123.sugarondemand.com  \nVersion: 26.2.0\n"), 'Report identity missing or misplaced');
 check(count($report->PDO->queries) === 8, 'Missing query');
-check(str_contains($report->output, "| Database Size in GB |\n| --- |\n| 580.0516 |"), 'Missing Markdown result');
+check((bool) preg_match('/\| Database Size in GB \|\n\| -+ \|\n\| 580\.0516 +\|/', $report->output), 'Missing Markdown result');
 check(str_contains($report->output, '_No matching rows._'), 'Empty results missing');
 check(substr_count($report->output, '```sql') === 8, 'SQL blocks missing');
 check(substr_count($report->output, '```') === 16, 'Results should not be code-fenced');
@@ -49,7 +49,16 @@ check(str_contains($report->output, "large.\n```sql"), 'Audit SQL block missing 
 $table = $report->table([['A|B' => "one|two\r\n<three>", 'Null' => null, 'Zero' => 0]]);
 check(str_contains($table, 'A&#124;B'), 'Header pipe not escaped');
 check(str_contains($table, 'one&#124;two<br>&lt;three&gt;'), 'Cell escaping failed');
-check(str_contains($table, '| NULL | 0 |'), 'Null/zero not preserved');
+check((bool) preg_match('/\| NULL +\| 0 +\|/', $table), 'Null/zero not preserved');
+$table = $report->table([
+    ['Database' => 'db_case595447b', 'Table' => 'accounts_audit', 'Size in GB' => '9.74'],
+    ['Database' => 'db_case595447b', 'Table' => 'revenue_line_items_audit', 'Size in GB' => '2.95'],
+]);
+check(str_contains($table, 'revenue_line_items_audit'), 'Table names must remain copyable');
+check(str_contains($table, 'db_case595447b'), 'Database names must remain copyable');
+check(!str_contains($table, '&#95;'), 'Underscores must not be encoded');
+$lengths = array_map('strlen', explode("\n", trim($table)));
+check(count(array_unique($lengths)) === 1, 'Plain-text columns must align');
 $report->Subscription = [];
 $report->InstanceInfo['VERSION'] = '';
 $report->output = '';

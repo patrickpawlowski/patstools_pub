@@ -886,15 +886,29 @@ class sugarutils {
         $Escape = static function ($Value) {
             if ($Value === null) return 'NULL';
             $Value = htmlspecialchars((string) $Value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            return str_replace(array('\\', '|', '`', '*', '_', "\r\n", "\r", "\n"),
-                array('&#92;', '&#124;', '&#96;', '&#42;', '&#95;', '<br>', '<br>', '<br>'), $Value);
+            return str_replace(array('\\', '|', '`', '*', "\r\n", "\r", "\n"),
+                array('&#92;', '&#124;', '&#96;', '&#42;', '<br>', '<br>', '<br>'), $Value);
         };
-        $Lines = array('| ' . implode(' | ', array_map($Escape, $Headers)) . ' |',
-            '| ' . implode(' | ', array_fill(0, count($Headers), '---')) . ' |');
+        $Table = array(array_map($Escape, $Headers));
         foreach ($Rows as $Row) {
             $Cells = array();
             foreach ($Headers as $Header) $Cells[] = $Escape($Row[$Header] ?? null);
+            $Table[] = $Cells;
+        }
+        // Pad the Markdown source as well as rendering it as a table.
+        $Widths = array_fill(0, count($Headers), 3);
+        foreach ($Table as $Cells) {
+            foreach ($Cells as $Index => $Cell) $Widths[$Index] = max($Widths[$Index], strlen($Cell));
+        }
+        $Lines = array();
+        foreach ($Table as $RowIndex => $Cells) {
+            foreach ($Cells as $Index => $Cell) $Cells[$Index] = str_pad($Cell, $Widths[$Index]);
             $Lines[] = '| ' . implode(' | ', $Cells) . ' |';
+            if ($RowIndex === 0) {
+                $Lines[] = '| ' . implode(' | ', array_map(static function ($Width) {
+                    return str_repeat('-', $Width);
+                }, $Widths)) . ' |';
+            }
         }
         return "\n" . implode("\n", $Lines) . "\n\n";
     }
