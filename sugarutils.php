@@ -3014,8 +3014,8 @@ WHERE parent_id IS NOT NULL
     }
 
     public function runHealthCheck() {
-        $Answer = $this->ask("Please enter the version of the Health Check you would like to run.\n14.0.3, 14.2.0, 25.1.0, 25.2.0, 26.1.0 (default 26.1.0)");
-        $HealthCheckVersion = $Answer ? $Answer:'26.1.0';
+        $Answer = $this->ask("Please enter the version of the Health Check you would like to run.\n14.0.3, 14.2.0, 25.1.0, 25.2.0, 26.1.0, 26.2.0 (default 26.2.0)");
+        $HealthCheckVersion = $Answer ? $Answer:'26.2.0';
         if (!preg_match('/^[0-9]+\.[0-9]+\.[0-9]+$/', $HealthCheckVersion)) {
             $this->echoc("Health Check version must use the numeric x.y.z format.\n", 'red');
             $this->ShowMenu = false;
