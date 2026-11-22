@@ -18,7 +18,7 @@ eval('class LanguageAssessmentHarness {
     public $InstanceInfo = [];
     public $ShowMenu = true;
     public function echoc($text, $color) { echo $text; }
-    public function recommend($size, $current) { return $this->recommendedLanguageThreshold($size, $current); }
+    public function recommend($size) { return $this->recommendedLanguageThreshold($size); }
     public function paths(&$error) { return $this->languageExtensionFolderPaths($error); }
     public function report() { ob_start(); $this->assessLanguageExtensions(); return ob_get_clean(); }
 ' . $methods . '}');
@@ -28,8 +28,8 @@ function check($condition, $message) {
 }
 
 $scan = new LanguageAssessmentHarness();
-foreach ([[19.17, 20, 25], [18.51, 10, 25], [19.17, 30, 30], [0, 10, 10], [10, 10, 15]] as $case) {
-    check($scan->recommend($case[0], $case[1]) == $case[2], 'Incorrect recommendation');
+foreach ([[19.17, 25], [18.51, 25], [6.18, 10], [0, 10], [10, 15]] as $case) {
+    check($scan->recommend($case[0]) == $case[1], 'Incorrect recommendation');
 }
 $root = sys_get_temp_dir() . '/lea-test-' . bin2hex(random_bytes(8));
 $cwd = getcwd();
@@ -63,6 +63,12 @@ try {
     check(str_contains($report, '1 additional list definitions'), 'Duplicate fixture not detected');
     check(str_contains($report, $module), 'Module absent from report');
     check(str_contains($report, '10% headroom'), 'Incorrect headroom text');
+    unlink($module . '/data.txt');
+    $scan->SugarConfig = ['lang_ext_folder_max_size_mb' => 620];
+    $report = $scan->report();
+    check(str_contains($report, "= 620;"), 'Current high threshold missing');
+    check(str_contains($report, "**Recommended**\n\n```php\n\$sugar_config['lang_ext_folder_max_size_mb'] = 10;"), 'Cleaned instance should recommend default threshold');
+    check($scan->SugarConfig['lang_ext_folder_max_size_mb'] === 620, 'Assessment must not change configuration');
     echo "Language assessment tests passed.\n";
 } finally {
     chdir($cwd);

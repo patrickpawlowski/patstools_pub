@@ -564,7 +564,7 @@ class sugarutils {
         foreach ($ExistingFolders as $Folder) {
             $LargestFolderMiB = max($LargestFolderMiB, $Folder['LogicalMiB']);
         }
-        $SuggestedThresholdMiB = $this->recommendedLanguageThreshold($LargestFolderMiB, $ThresholdMiB);
+        $SuggestedThresholdMiB = $this->recommendedLanguageThreshold($LargestFolderMiB);
 
         $AccountName = $this->singleLineValue($this->Subscription['account_name'] ?? 'Unknown Account');
         $InstanceName = $this->singleLineValue($this->InstanceInfo['INSTANCE'] ?? 'Unknown');
@@ -685,7 +685,7 @@ class sugarutils {
         $Report[] = '```';
         $Report[] = '';
         $Report[] = 'Based on the largest measured folder, with 10% headroom, rounded up to the next 5 MiB. '
-            . 'An existing higher setting is retained. Rerun the Health Check to verify.';
+            . 'The minimum recommendation is the default 10 MiB; an existing higher setting can be reduced to this recommendation. Rerun the Health Check to verify.';
         if ($CompiledDefinitions['ExtraDefinitions'] > 0) {
             $Report[] = 'The threshold recommendation does not resolve duplicate definitions. Review them separately using supported cleanup tooling.';
         }
@@ -696,8 +696,8 @@ class sugarutils {
         $this->ShowMenu = false;
     }
 
-    private function recommendedLanguageThreshold($LargestMiB, $CurrentMiB) {
-        return max($CurrentMiB, ceil(($LargestMiB * 1.10) / 5) * 5);
+    private function recommendedLanguageThreshold($LargestMiB) {
+        return max(self::DEFAULT_LANG_EXT_FOLDER_MAX_SIZE_MB, ceil(($LargestMiB * 1.10) / 5) * 5);
     }
 
     private function languageExtensionFolderPaths(&$Error) {
