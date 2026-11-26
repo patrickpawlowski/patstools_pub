@@ -375,6 +375,7 @@ class sugarutils {
             'scu' => array('label' => 'Sugar Checkup', 'method' => 'runSugarCheckup', 'section' => 'Maintenance / Repairs'),
             'hc' => array('label' => 'Health Check', 'method' => 'runHealthCheck', 'section' => 'Maintenance / Repairs'),
             'lea' => array('label' => 'Language Extension Assessment', 'method' => 'assessLanguageExtensions', 'section' => 'Maintenance / Repairs'),
+            'lec' => array('label' => 'Clean application language extensions (backup and rebuild)', 'method' => 'cleanLanguageExtensions', 'section' => 'Maintenance / Repairs'),
             'qrr' => array('label' => 'Quick Repair and Rebuild', 'method' => 'runQuickRepairandRebuild', 'section' => 'Maintenance / Repairs'),
             'rdis' => array('label' => 'Run Data Integrity Scripts', 'method' => 'runDataIntegrityScripts', 'section' => 'Maintenance / Repairs'),
             'pm' => array('label' => 'Parse Manifest', 'method' => 'parseManifest', 'section' => 'Maintenance / Repairs'),
@@ -537,6 +538,42 @@ class sugarutils {
         
         $this->whatsThis();
         $this->ShowMenu = false;
+    }
+
+    private function cleanLanguageExtensions() {
+        $Version = '20261123.150000';
+        $Hash = 'cedc9579011fcdcf8df6671359fcb63db0567039884e7248beb493a1b05b3b59';
+        $URL = 'https://raw.githubusercontent.com/patrickpawlowski/patstools_pub/refs/tags/language-cleaner-' . $Version . '/sugarappliststringscleaner.php';
+        $Root = realpath(getcwd());
+        $Directory = $Root . '/cloud_support/language-cleaner-' . bin2hex(random_bytes(6));
+        $this->echoc("Language cleaner {$Version}\nInstance: {$this->InstanceInfo['INSTANCE']}\nRoot: {$Root}\n", 'label');
+        if (!$this->askYes('Download the verified cleaner? It will ask for CLEAN before making changes.')) return;
+        if (!is_dir(dirname($Directory))) mkdir(dirname($Directory), 0700, true);
+        if (!mkdir($Directory, 0700)) throw new RuntimeException('Cannot create private tool directory.');
+        $Tool = $Directory . '/cleaner.php';
+        $Launcher = $Directory . '/launch.php';
+        try {
+            system('curl --fail --silent --show-error --location --proto =https --proto-redir =https --connect-timeout 15 --max-time 120 '
+                . escapeshellarg($URL) . ' -o ' . escapeshellarg($Tool), $Code);
+            if ($Code !== 0 || !is_file($Tool) || !hash_equals($Hash, hash_file('sha256', $Tool))) {
+                throw new RuntimeException('Cleaner download failed or checksum mismatch; nothing executed. Check that the release tag has been published.');
+            }
+            // shadowy may change cwd; carry the confirmed instance root in the launcher.
+            $PHP = '<?php define("LANGUAGE_CLEANER_ROOT", ' . var_export($Root, true) . '); require ' . var_export($Tool, true) . ';';
+            if (file_put_contents($Launcher, $PHP) !== strlen($PHP)) throw new RuntimeException('Cannot write launcher.');
+            passthru('shadowy ' . escapeshellarg($Launcher), $Code);
+            if ($Code === 0) {
+                $this->assessLanguageExtensions();
+            } else {
+                $this->echoc("Cleaner did not complete (exit {$Code}). Review its output; do not assume cleanup/rebuild succeeded.\n", 'red');
+            }
+        } catch (Throwable $Error) {
+            $this->echoc($Error->getMessage() . "\n", 'red');
+        } finally {
+            if (is_file($Launcher)) unlink($Launcher);
+            if (is_file($Tool)) unlink($Tool);
+            rmdir($Directory);
+        }
     }
 
     private function assessLanguageExtensions() {
@@ -1383,40 +1420,67 @@ ORDER BY data_length + index_length DESC, table_name";
 
     private function searchPackagesForString($Command) {
         $SearchString = $this->getCommandArgument($Command);
-        if (!$SearchString) {
+        if ($SearchString === '') {
             $SearchString = $this->ask("String to search for: ");
         }
-        $this->echoc("Searching zip files in upgrades/modules for: ", 'label');
-        $this->echoc($SearchString . PHP_EOL, 'data');
-        $Matches = $this->findZipEntryMatches($SearchString);
+        $this->echoc("Searching ZIP entry names (not contents); case-insensitive literal substring.\n", 'label');
+        $this->echoc('Search term: ' . json_encode($SearchString, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . PHP_EOL, 'data');
+        $this->echoc('Working directory: ' . getcwd() . PHP_EOL, 'data');
+        $Matches = $this->findZipEntryMatches($SearchString, true);
         if (!$Matches) {
-            $this->echoc("No matching files found inside upgrades/module ZIP archives.\n", 'green');
+            $this->echoc("No matches returned. Check the scan summary and any errors above.\n", 'yellow');
         } else {
             $this->displayZipEntryMatches($Matches);
         }
         $this->ShowMenu = false;
     }
 
-    private function findZipEntryMatches(string $SearchString): array {
+    private function findZipEntryMatches(string $SearchString, bool $Verbose = false): array {
         $Matches = array();
         if ($SearchString === '' || !is_dir('upgrades/module')) {
+            if ($Verbose) {
+                $this->echoc($SearchString === '' ? "Empty search term; search not run.\n" : "Directory upgrades/module does not exist; search not run.\n", 'yellow');
+            }
             return $Matches;
         }
 
         $ZipFiles = glob('upgrades/module/*.zip') ?: array();
         sort($ZipFiles, SORT_NATURAL | SORT_FLAG_CASE);
-        foreach ($ZipFiles as $ZipFile) {
+        $Scanned = 0;
+        $Failed = 0;
+        $EntryCount = 0;
+        if ($Verbose) {
+            $this->echoc('Archives found (upgrades/module/*.zip, non-recursive): ' . count($ZipFiles) . PHP_EOL, 'label');
+        }
+        foreach ($ZipFiles as $Index => $ZipFile) {
             $Entries = array();
             $ReturnCode = 0;
-            exec('unzip -Z1 ' . escapeshellarg($ZipFile) . ' 2>/dev/null', $Entries, $ReturnCode);
+            $ListCommand = 'unzip -Z1 ' . escapeshellarg($ZipFile);
+            if ($Verbose) {
+                $this->echoc('[' . ($Index + 1) . '/' . count($ZipFiles) . '] ' . $ZipFile . PHP_EOL, 'label');
+                $this->echoc('Command: ' . $ListCommand . PHP_EOL, 'command');
+            }
+            exec($ListCommand . ' 2>&1', $Entries, $ReturnCode);
             if ($ReturnCode !== 0) {
+                $Failed++;
+                $this->echoc("Could not list {$ZipFile} (unzip exit {$ReturnCode}):\n" . implode(PHP_EOL, $Entries) . PHP_EOL, 'red');
                 continue;
             }
+            $Scanned++;
+            $EntryCount += count($Entries);
+            $ArchiveMatches = 0;
             foreach ($Entries as $Entry) {
                 if (stripos($Entry, $SearchString) !== false) {
                     $Matches[] = array('Archive' => $ZipFile, 'Entry' => $Entry);
+                    $ArchiveMatches++;
                 }
             }
+            if ($Verbose) {
+                $this->echoc('  Entries searched: ' . count($Entries) . "; matches: {$ArchiveMatches}\n", 'data');
+            }
+        }
+        if ($Verbose) {
+            $this->echoc("Scan summary: {$Scanned} archives searched, {$Failed} failed, {$EntryCount} entries, " . count($Matches) . " matches.\n", $Failed ? 'yellow' : 'label');
         }
 
         return $Matches;
